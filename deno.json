@@ -1,7 +1,15 @@
 {
   "importMap": "./import_map.json",
   "tasks": {
-    "start": "deno run --allow-net --allow-read --allow-env app.ts"
+    "start": "deno run --allow-net --allow-sys --allow-write --allow-read --allow-env app.ts",
+    "lint": "deno lint",
+    "build": "deno task build_mac_x86 && deno task build_mac_arm && deno task build_win && deno task build_linux_x86 && deno task build_linux_arm",
+    "build_mac_x86": "deno compile --target=x86_64-apple-darwin --output=bin/steamcmd_mac_amd64 --allow-net --allow-sys --allow-write --allow-read --allow-env app.ts",
+    "build_mac_arm": "deno compile --target=aarch64-apple-darwin --output=bin/steamcmd_mac_arm --allow-net --allow-sys --allow-write --allow-read --allow-env app.ts",
+    "build_win": "deno compile --target=x86_64-pc-windows-msvc --output=bin/steamcmd_win64.exe --allow-net --allow-sys --allow-write --allow-read --allow-env app.ts",
+    "build_linux_x86": "deno compile --target=x86_64-unknown-linux-gnu --output=bin/steamcmd_linux_amd64 --allow-net --allow-sys --allow-write --allow-read --allow-env app.ts",
+    "build_linux_arm": "deno compile --target=aarch64-unknown-linux-gnu --output=bin/steamcmd_linux_arm --allow-net --allow-sys --allow-write --allow-read --allow-env app.ts"
+
   },
   "compilerOptions": {
     "lib": ["deno.ns", "dom"],
