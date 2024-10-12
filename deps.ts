@@ -1,4 +1,3 @@
-// deps.ts
 export { Application, Router, Context } from "https://deno.land/x/oak@v12.5.0/mod.ts";
 export { default as SteamUser } from "npm:steam-user";
 export { connect } from "https://deno.land/x/redis@v0.29.3/mod.ts";

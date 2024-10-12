@@ -1,11 +1,10 @@
 {
-    "importMap": "./import_map.json",
-    "tasks": {
-      "start": "deno run --allow-net --allow-sys --allow-write --allow-read --allow-env app.ts"
-    },
-    "compilerOptions": {
-      "lib": ["esnext"],
-      "types": []
-    }
+  "importMap": "./import_map.json",
+  "tasks": {
+    "start": "deno run --allow-net --allow-read --allow-env app.ts"
+  },
+  "compilerOptions": {
+    "lib": ["deno.ns", "dom"],
+    "types": []
   }
-  
+}

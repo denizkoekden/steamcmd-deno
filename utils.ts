@@ -13,8 +13,5 @@ await log.setup({
   },
 });
 
-export function getLogger(name?: string) {
-  return log.getLogger(name);
-}
-
-export default log;
+// Export the 'log' object directly
+export { log };

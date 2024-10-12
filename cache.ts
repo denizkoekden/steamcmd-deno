@@ -1,10 +1,12 @@
 // cache.ts
-import { connect } from "https://deno.land/x/redis@v0.29.3/mod.ts";
+import { connect, Redis } from "https://deno.land/x/redis@v0.29.3/mod.ts";
 import config from "./config.ts";
-import { getLogger } from "./utils.ts";
-const logger = getLogger("cache");
+import { log } from "./utils.ts";
+import { AppInfo } from "./functions.ts";
 
-let redisClient: any = null;
+const logger = log.getLogger("cache");
+
+let redisClient: Redis | null = null;
 
 export async function getRedisClient() {
   if (!config.CACHE_ENABLED) {
@@ -29,7 +31,7 @@ export async function getRedisClient() {
   return redisClient;
 }
 
-export async function cacheRead(appId: string): Promise<any | null> {
+export async function cacheRead(appId: string): Promise<AppInfo | null> {
   if (!config.CACHE_ENABLED) {
     return null;
   }
@@ -53,7 +55,7 @@ export async function cacheRead(appId: string): Promise<any | null> {
   }
 }
 
-export async function cacheWrite(appId: string, data: any): Promise<void> {
+export async function cacheWrite(appId: string, data: AppInfo): Promise<void> {
   if (!config.CACHE_ENABLED) {
     return;
   }

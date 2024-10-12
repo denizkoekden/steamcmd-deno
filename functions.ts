@@ -1,8 +1,15 @@
 import SteamUser from "npm:steam-user";
-import { getLogger } from "./utils.ts";
-const logger = getLogger("functions");
+import { log } from "./utils.ts";
+const logger = log.getLogger("functions");
 
-export async function getAppInfo(appId: number): Promise<any> {
+export interface AppInfo {
+  appid: number;
+  changenumber: number;
+  missingToken: boolean;
+  appinfo: Record<string, unknown>;
+}
+
+export async function getAppInfo(appId: number): Promise<AppInfo | null> {
   logger.info(`Started requesting app info for appId ${appId}`);
 
   const client = new SteamUser();
@@ -14,11 +21,11 @@ export async function getAppInfo(appId: number): Promise<any> {
       resolve();
     });
 
-    client.once('error', (err) => {
-      logger.error(`Error logging in to Steam: ${err}`);
-      reject(err);
+    client.once('error', (err: Error) => {
+        logger.error(`Error logging in to Steam: ${err}`);
+        reject(err);
+      });
     });
-  });
 
   // Attempt to log on anonymously
   client.logOn({ anonymous: true });
@@ -39,7 +46,7 @@ export async function getAppInfo(appId: number): Promise<any> {
 
     if (data.apps && data.apps[appId]) {
       logger.info(`Successfully retrieved app info for appId ${appId}`);
-      return data.apps[appId];
+      return data.apps[appId] as AppInfo;
     } else {
       logger.warning(`No app info found for appId ${appId}`);
       return null;
