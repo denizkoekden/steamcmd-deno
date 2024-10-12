@@ -118,16 +118,46 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: |
-          bin/steamcmd_mac_amd64
-          bin/steamcmd_mac_arm
-          bin/steamcmd_win64.exe
-          bin/steamcmd_linux_amd64
-          bin/steamcmd_linux_arm
-        asset_name: |
-          steamcmd_mac_amd64
-          steamcmd_mac_arm
-          steamcmd_win64.exe
-          steamcmd_linux_amd64
-          steamcmd_linux_arm
+        asset_path: bin/steamcmd_mac_amd64
+        asset_name: steamcmd_mac_amd64
+        asset_content_type: application/octet-stream
+
+    - name: Attach macOS (ARM) Artifact
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: bin/steamcmd_mac_arm
+        asset_name: steamcmd_mac_arm
+        asset_content_type: application/octet-stream
+
+    - name: Attach Windows Artifact
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: bin/steamcmd_win64.exe
+        asset_name: steamcmd_win64.exe
+        asset_content_type: application/octet-stream
+
+    - name: Attach Linux (x86) Artifact
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: bin/steamcmd_linux_amd64
+        asset_name: steamcmd_linux_amd64
+        asset_content_type: application/octet-stream
+
+    - name: Attach Linux (ARM) Artifact
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: bin/steamcmd_linux_arm
+        asset_name: steamcmd_linux_arm
         asset_content_type: application/octet-stream
