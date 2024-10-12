@@ -1,6 +1,6 @@
 {
     "imports": {
-      "steam-user": "npm:steam-user@4.19.6"
+      "npm:": "npm:"
     }
   }
   

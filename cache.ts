@@ -1,43 +1,73 @@
-import { RedisClient } from "./deps.ts";
-import { DETA_PROJECT_KEY, DETA_BASE_NAME } from "./config.ts";
+// cache.ts
+import { connect } from "https://deno.land/x/redis@v0.29.3/mod.ts";
+import config from "./config.ts";
+import { getLogger } from "./utils.ts";
+const logger = getLogger("cache");
 
-let redis = null;
-if (env.CACHE_TYPE === "redis") {
-  redis = await new RedisClient.connect({
-    hostname: env.REDIS_HOST || "127.0.0.1",
-    port: Number(env.REDIS_PORT) || 6379,
-  });
+let redisClient: any = null;
+
+export async function getRedisClient() {
+  if (!config.CACHE_ENABLED) {
+    return null;
+  }
+
+  if (!redisClient) {
+    try {
+      redisClient = await connect({
+        hostname: config.REDIS_HOST!,
+        port: config.REDIS_PORT!,
+        password: config.REDIS_PASSWORD,
+      });
+      logger.info("Connected to Redis");
+    } catch (err) {
+      logger.error(`Failed to connect to Redis: ${err}`);
+      // Disable caching if connection fails
+      config.CACHE_ENABLED = false;
+      redisClient = null;
+    }
+  }
+  return redisClient;
 }
 
-export async function cacheRead(appId: number) {
-  if (env.CACHE_TYPE === "redis") {
-    const data = await redis.get(appId.toString());
-    return data ? JSON.parse(data) : null;
-  } else if (DETA_PROJECT_KEY) {
-    const res = await fetch(`https://database.deta.sh/v1/${DETA_PROJECT_KEY}/${DETA_BASE_NAME}/items/${appId}`, {
-      method: "GET",
-      headers: {
-        "X-API-Key": DETA_PROJECT_KEY,
-      },
-    });
-    const json = await res.json();
-    return json ? json.data : null;
+export async function cacheRead(appId: string): Promise<any | null> {
+  if (!config.CACHE_ENABLED) {
+    return null;
+  }
+
+  try {
+    const client = await getRedisClient();
+    if (!client) {
+      return null;
+    }
+    const data = await client.get(appId);
+    if (data) {
+      logger.info(`Cache hit for appId ${appId}`);
+      return JSON.parse(data);
+    } else {
+      logger.info(`Cache miss for appId ${appId}`);
+      return null;
+    }
+  } catch (err) {
+    logger.error(`Error reading from Redis: ${err}`);
+    return null;
   }
 }
 
-export async function cacheWrite(appId: number, data: any) {
-  if (env.CACHE_TYPE === "redis") {
-    await redis.set(appId.toString(), JSON.stringify(data));
-  } else if (DETA_PROJECT_KEY) {
-    await fetch(`https://database.deta.sh/v1/${DETA_PROJECT_KEY}/${DETA_BASE_NAME}/items`, {
-      method: "PUT",
-      headers: {
-        "X-API-Key": DETA_PROJECT_KEY,
-      },
-      body: JSON.stringify({
-        key: appId.toString(),
-        data,
-      }),
+export async function cacheWrite(appId: string, data: any): Promise<void> {
+  if (!config.CACHE_ENABLED) {
+    return;
+  }
+
+  try {
+    const client = await getRedisClient();
+    if (!client) {
+      return;
+    }
+    await client.set(appId, JSON.stringify(data), {
+      ex: config.CACHE_EXPIRATION,
     });
+    logger.info(`Cached data for appId ${appId}`);
+  } catch (err) {
+    logger.error(`Error writing to Redis: ${err}`);
   }
 }
