@@ -44,120 +44,59 @@ jobs:
         echo "New version: $new_version"
         echo "NEW_VERSION=$new_version" >> $GITHUB_OUTPUT
 
-    # Create a release using GitHub's release action
+    # Create a release using GitHub CLI
     - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ steps.bump_version.outputs.NEW_VERSION }}
-        release_name: Release ${{ steps.bump_version.outputs.NEW_VERSION }}
-        draft: false
-        prerelease: false
+      run: |
+        gh release create ${{ steps.bump_version.outputs.NEW_VERSION }} --title "Release ${{ steps.bump_version.outputs.NEW_VERSION }}" --notes "Automated release."
 
     # Build for macOS (x86)
     - name: Build for macOS (x86)
       run: deno task build_mac_x86
 
-    # Upload macOS (x86) artifact
-    - name: Upload macOS (x86) build
-      uses: actions/upload-artifact@v3
-      with:
-        name: steamcmd_mac_amd64
-        path: bin/steamcmd_mac_amd64
-
     # Build for macOS (ARM)
     - name: Build for macOS (ARM)
       run: deno task build_mac_arm
-
-    # Upload macOS (ARM) artifact
-    - name: Upload macOS (ARM) build
-      uses: actions/upload-artifact@v3
-      with:
-        name: steamcmd_mac_arm
-        path: bin/steamcmd_mac_arm
 
     # Build for Windows
     - name: Build for Windows (x86_64)
       run: deno task build_win
 
-    # Upload Windows build
-    - name: Upload Windows build
-      uses: actions/upload-artifact@v3
-      with:
-        name: steamcmd_win64
-        path: bin/steamcmd_win64.exe
-
     # Build for Linux (x86)
     - name: Build for Linux (x86_64)
       run: deno task build_linux_x86
-
-    # Upload Linux (x86) build
-    - name: Upload Linux (x86_64) build
-      uses: actions/upload-artifact@v3
-      with:
-        name: steamcmd_linux_amd64
-        path: bin/steamcmd_linux_amd64
 
     # Build for Linux (ARM)
     - name: Build for Linux (ARM)
       run: deno task build_linux_arm
 
-    # Upload Linux (ARM) build
+    # Install GitHub CLI
+    - name: Install GitHub CLI
+      run: sudo apt-get install gh
+
+    # Upload release assets using GitHub CLI
+    - name: Upload macOS (x86) build
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: gh release upload ${{ steps.bump_version.outputs.NEW_VERSION }} bin/steamcmd_mac_amd64 --clobber
+
+    - name: Upload macOS (ARM) build
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: gh release upload ${{ steps.bump_version.outputs.NEW_VERSION }} bin/steamcmd_mac_arm --clobber
+
+    - name: Upload Windows build
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: gh release upload ${{ steps.bump_version.outputs.NEW_VERSION }} bin/steamcmd_win64.exe --clobber
+
+    - name: Upload Linux (x86_64) build
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: gh release upload ${{ steps.bump_version.outputs.NEW_VERSION }} bin/steamcmd_linux_amd64 --clobber
+
     - name: Upload Linux (ARM) build
-      uses: actions/upload-artifact@v3
-      with:
-        name: steamcmd_linux_arm
-        path: bin/steamcmd_linux_arm
-
-    # Attach artifacts to the GitHub release
-    - name: Attach Artifacts to Release
-      uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: bin/steamcmd_mac_amd64
-        asset_name: steamcmd_mac_amd64
-        asset_content_type: application/octet-stream
-
-    - name: Attach macOS (ARM) Artifact
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: bin/steamcmd_mac_arm
-        asset_name: steamcmd_mac_arm
-        asset_content_type: application/octet-stream
-
-    - name: Attach Windows Artifact
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: bin/steamcmd_win64.exe
-        asset_name: steamcmd_win64.exe
-        asset_content_type: application/octet-stream
-
-    - name: Attach Linux (x86) Artifact
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: bin/steamcmd_linux_amd64
-        asset_name: steamcmd_linux_amd64
-        asset_content_type: application/octet-stream
-
-    - name: Attach Linux (ARM) Artifact
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: bin/steamcmd_linux_arm
-        asset_name: steamcmd_linux_arm
-        asset_content_type: application/octet-stream
+      run: gh release upload ${{ steps.bump_version.outputs.NEW_VERSION }} bin/steamcmd_linux_arm --clobber
