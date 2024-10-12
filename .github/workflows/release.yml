@@ -22,30 +22,27 @@ jobs:
     - name: Setup Deno
       uses: denoland/setup-deno@v1
       with:
-        deno-version: v1.x
+        deno-version: v2.0.0
 
-    # Get the latest tag or set default
     - name: Get Latest Tag
       id: get_latest_tag
       run: |
         git fetch --tags
         TAG=$(git describe --tags `git rev-list --tags --max-count=1` || echo "v0.0.0")
         echo "Latest tag: $TAG"
-        echo "::set-output name=LATEST_TAG::$TAG"
+        echo "LATEST_TAG=$TAG" >> $GITHUB_OUTPUT
 
-    # Bump the version (increase patch number)
     - name: Bump Version
       id: bump_version
       run: |
         latest_version=${{ steps.get_latest_tag.outputs.LATEST_TAG }}
-        if [[ "$latest_version" == "" ]]; then
+        if [[ "$latest_version" == "v0.0.0" ]]; then
           new_version="v1.0.0"
         else
-          # Increment the patch version in the semver (vX.X.X)
           new_version=$(echo $latest_version | awk -F. '{$NF = $NF + 1;} 1' | sed 's/ /./g')
         fi
         echo "New version: $new_version"
-        echo "::set-output name=NEW_VERSION::$new_version"
+        echo "NEW_VERSION=$new_version" >> $GITHUB_OUTPUT
 
     # Create a release using GitHub's release action
     - name: Create Release
