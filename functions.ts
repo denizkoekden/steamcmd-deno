@@ -41,7 +41,7 @@ export async function getAppInfo(appId: number): Promise<AppInfo | null> {
   // Fetch product info
   try {
     logger.info(`Fetching product info for appId ${appId}`);
-    const data = await client.getProductInfo([appId], []);
+    const data = await client.getProductInfo([appId], [], true);
     client.logOff();
 
     if (data.apps && data.apps[appId]) {
