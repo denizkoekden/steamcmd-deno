@@ -1,0 +1,120 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  release:
+    name: Create Release and Build
+    runs-on: ubuntu-latest
+
+    steps:
+    # Checkout the repository
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    # Set up Deno environment
+    - name: Setup Deno
+      uses: denoland/setup-deno@v1
+      with:
+        deno-version: v1.x
+
+    # Create a release using GitHub's release action
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.sha }}
+        release_name: Release ${{ github.sha }}
+        draft: false
+        prerelease: false
+
+    # Build for macOS (x86)
+    - name: Build for macOS (x86)
+      run: deno task build_mac_x86
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    # Upload macOS (x86) artifact
+    - name: Upload macOS (x86) build
+      uses: actions/upload-artifact@v3
+      with:
+        name: steamcmd_mac_amd64
+        path: bin/steamcmd_mac_amd64
+
+    # Build for macOS (ARM)
+    - name: Build for macOS (ARM)
+      run: deno task build_mac_arm
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # Upload macOS (ARM) artifact
+    - name: Upload macOS (ARM) build
+      uses: actions/upload-artifact@v3
+      with:
+        name: steamcmd_mac_arm
+        path: bin/steamcmd_mac_arm
+
+    # Build for Windows
+    - name: Build for Windows (x86_64)
+      run: deno task build_win
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # Upload Windows build
+    - name: Upload Windows build
+      uses: actions/upload-artifact@v3
+      with:
+        name: steamcmd_win64
+        path: bin/steamcmd_win64.exe
+
+    # Build for Linux (x86)
+    - name: Build for Linux (x86_64)
+      run: deno task build_linux_x86
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # Upload Linux (x86) build
+    - name: Upload Linux (x86_64) build
+      uses: actions/upload-artifact@v3
+      with:
+        name: steamcmd_linux_amd64
+        path: bin/steamcmd_linux_amd64
+
+    # Build for Linux (ARM)
+    - name: Build for Linux (ARM)
+      run: deno task build_linux_arm
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # Upload Linux (ARM) build
+    - name: Upload Linux (ARM) build
+      uses: actions/upload-artifact@v3
+      with:
+        name: steamcmd_linux_arm
+        path: bin/steamcmd_linux_arm
+
+    # Attach artifacts to the GitHub release
+    - name: Attach Artifacts to Release
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: |
+          bin/steamcmd_mac_amd64
+          bin/steamcmd_mac_arm
+          bin/steamcmd_win64.exe
+          bin/steamcmd_linux_amd64
+          bin/steamcmd_linux_arm
+        asset_name: |
+          steamcmd_mac_amd64
+          steamcmd_mac_arm
+          steamcmd_win64.exe
+          steamcmd_linux_amd64
+          steamcmd_linux_arm
+        asset_content_type: application/octet-stream
