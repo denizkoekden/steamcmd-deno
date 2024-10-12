@@ -1,0 +1,8 @@
+{
+  "compilerOptions": {
+    "lib": ["deno.ns", "dom"]
+  },
+  "tasks": {
+    "start": "deno run --allow-net --allow-read --allow-env steamClient.ts"
+  }
+}
