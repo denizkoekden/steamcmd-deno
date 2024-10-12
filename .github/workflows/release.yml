@@ -6,7 +6,7 @@ on:
       - main
 
 permissions:
-  contents: write  # Setzt Berechtigungen für den `GITHUB_TOKEN`
+  contents: write
 
 jobs:
   release:
@@ -24,6 +24,29 @@ jobs:
       with:
         deno-version: v1.x
 
+    # Get the latest tag
+    - name: Get Latest Tag
+      id: get_latest_tag
+      run: |
+        git fetch --tags
+        TAG=$(git describe --tags `git rev-list --tags --max-count=1`)
+        echo "Latest tag: $TAG"
+        echo "::set-output name=LATEST_TAG::$TAG"
+
+    # Bump the version (increase patch number)
+    - name: Bump Version
+      id: bump_version
+      run: |
+        latest_version=${{ steps.get_latest_tag.outputs.LATEST_TAG }}
+        if [[ "$latest_version" == "" ]]; then
+          new_version="v1.0.0"
+        else
+          # Increment the patch version in the semver (vX.X.X)
+          new_version=$(echo $latest_version | awk -F. '{$NF = $NF + 1;} 1' | sed 's/ /./g')
+        fi
+        echo "New version: $new_version"
+        echo "::set-output name=NEW_VERSION::$new_version"
+
     # Create a release using GitHub's release action
     - name: Create Release
       id: create_release
@@ -31,17 +54,15 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: ${{ github.sha }}
-        release_name: Release ${{ github.sha }}
+        tag_name: ${{ steps.bump_version.outputs.NEW_VERSION }}
+        release_name: Release ${{ steps.bump_version.outputs.NEW_VERSION }}
         draft: false
         prerelease: false
 
     # Build for macOS (x86)
     - name: Build for macOS (x86)
       run: deno task build_mac_x86
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    
+
     # Upload macOS (x86) artifact
     - name: Upload macOS (x86) build
       uses: actions/upload-artifact@v3
@@ -52,8 +73,6 @@ jobs:
     # Build for macOS (ARM)
     - name: Build for macOS (ARM)
       run: deno task build_mac_arm
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     # Upload macOS (ARM) artifact
     - name: Upload macOS (ARM) build
@@ -65,8 +84,6 @@ jobs:
     # Build for Windows
     - name: Build for Windows (x86_64)
       run: deno task build_win
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     # Upload Windows build
     - name: Upload Windows build
@@ -78,8 +95,6 @@ jobs:
     # Build for Linux (x86)
     - name: Build for Linux (x86_64)
       run: deno task build_linux_x86
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     # Upload Linux (x86) build
     - name: Upload Linux (x86_64) build
@@ -91,8 +106,6 @@ jobs:
     # Build for Linux (ARM)
     - name: Build for Linux (ARM)
       run: deno task build_linux_arm
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     # Upload Linux (ARM) build
     - name: Upload Linux (ARM) build
