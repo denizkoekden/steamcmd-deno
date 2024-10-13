@@ -1,12 +1,14 @@
 # SteamCMD Deno API
 
-This project provides a Deno-based API for querying Steam application data using `steam-user` npm package. It supports Redis caching and can be deployed across multiple platforms. The API allows fetching detailed information about Steam apps by their `appId`.
+This project provides a Deno-based API for querying Steam application data using the `steam-user` npm package. It supports Redis caching, Steam account authentication, and can be deployed across multiple platforms. The API allows fetching detailed information about Steam apps by their `appId`, with fallback support for anonymous queries.
 
 ## Features
 
-- Query Steam app data using the Steam Client protocol (via anonymous login).
+- Query Steam app data using the Steam Client protocol, supporting both authenticated and anonymous logins.
 - Cache responses in Redis to improve performance.
 - Multi-platform support with Deno's compile feature.
+- Customizable login behavior based on credentials sent via headers.
+- Retry mechanism when tokens are missing from authenticated logins.
 - Error handling and logging to track issues.
 - Build tasks for macOS, Linux, and Windows binaries.
 
@@ -16,6 +18,7 @@ This project provides a Deno-based API for querying Steam application data using
 - [Setup](#setup)
 - [Running the API](#running-the-api)
 - [API Usage](#api-usage)
+- [Authentication](#authentication)
 - [Building Binaries](#building-binaries)
 - [Tasks](#tasks)
 - [Contributing](#contributing)
@@ -64,13 +67,43 @@ You can query app information by `appId` using the following endpoint:
 GET http://localhost:8000/v1/info/{appId}
 ```
 
-
 ## API Usage
 
 The API exposes the following routes:
 
-- `GET /v1/info/:appId`: Fetches app information for a given Steam `appId`.
+- `GET /v1/info/:appId`: Fetches app information for a given Steam `appId`. Supports both authenticated and anonymous logins.
 - `GET /v1/version`: Retrieves the current API version.
+
+## Authentication
+
+### Authenticated vs. Anonymous Login
+
+The API supports both **authenticated** and **anonymous** logins when querying Steam app data.
+
+- **Authenticated Login**: When Steam credentials are provided in the request headers (`username` and `password`), the API logs in with these credentials to fetch the app data.
+- **Anonymous Login**: If no credentials are provided, the API falls back to anonymous login for querying the Steam app data.
+
+#### Sending Credentials
+
+To make an authenticated request, send the `username` and `password` in the request headers:
+
+```bash
+curl -X GET http://localhost:8000/v1/info/{appId} \
+     -H "username: your_steam_username" \
+     -H "password: your_steam_password"
+```
+
+If no credentials are sent, the request is handled anonymously by default:
+
+```bash
+curl -X GET http://localhost:8000/v1/info/{appId}
+```
+
+### Token Handling
+
+Certain Steam applications require a token to fetch more detailed information. If an authenticated request returns a `missingToken: true` response, the API automatically retries the request as **anonymous**, and logs a warning if the token is still missing after retrying.
+
+This behavior ensures the API delivers the most complete app data available, whether using authenticated or anonymous login.
 
 ## Building Binaries
 
