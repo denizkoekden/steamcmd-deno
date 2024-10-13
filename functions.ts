@@ -9,7 +9,7 @@ export interface AppInfo {
   appinfo: Record<string, unknown>;
 }
 
-export async function getAppInfo(appId: number): Promise<AppInfo | null> {
+export async function getAppInfo(appId: number, username:string|null, password:string|null): Promise<AppInfo | null> {
   logger.info(`Started requesting app info for appId ${appId}`);
 
   const client = new SteamUser();
@@ -27,8 +27,16 @@ export async function getAppInfo(appId: number): Promise<AppInfo | null> {
       });
     });
 
-  // Attempt to log on anonymously
-  client.logOn({ anonymous: true });
+    if (username && password) {
+      // Perform authenticated login
+      client.logOn({
+          accountName: username,
+          password: password,
+      });
+  } else {
+      // Perform anonymous login
+      client.logOn({ anonymous: true });
+  }
 
   // Wait for the client to log on
   try {
