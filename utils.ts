@@ -10,6 +10,18 @@ await log.setup({
       level: config.LOG_LEVEL,
       handlers: ["console"],
     },
+    app: { 
+      level: config.LOG_LEVEL,
+      handlers: ["console"],
+    },
+    cache: { 
+      level: config.LOG_LEVEL,
+      handlers: ["console"],
+    },
+    functions: { 
+      level: config.LOG_LEVEL,
+      handlers: ["console"],
+    },
   },
 });
 
