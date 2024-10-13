@@ -18,14 +18,14 @@ export async function getAppInfo(appId: number, username: string, password: stri
   const createLoginPromise = () => {
     return new Promise<void>((resolve, reject) => {
       client.once('loggedOn', () => {
-        logger.info('Successfully logged in to Steam!');
+        logger.debug('Successfully logged in to Steam!');
         resolve();
       });
 
       client.once('error', (err: Error) => {
         // Suppress "LogonSessionReplaced" as a non-critical error
         if (err.message === 'LogonSessionReplaced') {
-          logger.info('LogonSessionReplaced: Current session was replaced by a new one.');
+          logger.debug('LogonSessionReplaced: Current session was replaced by a new one.');
           resolve(); // Treat it as a successful logon, since we expect it when re-logging
         } else {
           logger.error(`Error logging in to Steam: ${err}`);
@@ -82,7 +82,7 @@ export async function getAppInfo(appId: number, username: string, password: stri
     await new Promise<void>((resolve) => {
       client.logOff();
       client.once('disconnected', () => {
-        logger.info('Logged off from Steam, retrying as anonymous...');
+        logger.debug('Logged off from Steam, retrying as anonymous...');
         resolve();
       });
     });
