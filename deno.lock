@@ -1,6 +1,8 @@
 {
   "version": "4",
   "specifiers": {
+    "npm:@types/node@*": "22.5.4",
+    "npm:path-to-regexp@6.2.1": "6.2.1",
     "npm:steam-user@*": "5.2.0"
   },
   "npm": {
@@ -64,6 +66,12 @@
     },
     "@types/long@4.0.2": {
       "integrity": "sha512-MqTGEo5bj5t157U6fA/BiDynNkn0YknVdh48CMPkTSpFTVmvao5UQmm7uEF6xBEo7qIMAlY/JSleYaE6VOdpaA=="
+    },
+    "@types/node@22.5.4": {
+      "integrity": "sha512-FDuKUJQm/ju9fT/SeX/6+gBzoPzlVCzfzmGkwKvRHQVxi4BntVbyIwf6a4Xn62mrvndLiml6z/UBXIdEVjQLXg==",
+      "dependencies": [
+        "undici-types"
+      ]
     },
     "@types/node@22.7.5": {
       "integrity": "sha512-jML7s2NAzMWc//QSJ1a3prpk78cOPchGvXJsC3C6R6PSMoooztvRVQEz89gmBTBY1SPMaqo5teB4uNHPdetShQ==",
@@ -138,6 +146,9 @@
     "node-bignumber@1.2.2": {
       "integrity": "sha512-VoTZHmdFQpZH1+q1dz2qcHNCwTWsJg2T3PYwlAyDNFOfVhSYUKQBLFcCpCud+wJBGgCttGavZILaIggDIKqEQQ=="
     },
+    "path-to-regexp@6.2.1": {
+      "integrity": "sha512-JLyh7xT1kizaEvcaXOQwOc2/Yhw6KZOvPf1S8401UyLk86CU79LN3vl7ztXGm/pZ+YjoyAJ4rxmHwbkBXJX+yw=="
+    },
     "permessage-deflate@0.1.7": {
       "integrity": "sha512-EUNi/RIsyJ1P1u9QHFwMOUWMYetqlE22ZgGbad7YP856WF4BFF0B7DuNy6vEGsgNNud6c/SkdWzkne71hH8MjA==",
       "dependencies": [
@@ -158,7 +169,7 @@
         "@protobufjs/pool",
         "@protobufjs/utf8",
         "@types/long",
-        "@types/node",
+        "@types/node@22.7.5",
         "long@4.0.0"
       ]
     },
@@ -175,7 +186,7 @@
         "@protobufjs/path",
         "@protobufjs/pool",
         "@protobufjs/utf8",
-        "@types/node",
+        "@types/node@22.7.5",
         "long@5.2.3"
       ]
     },

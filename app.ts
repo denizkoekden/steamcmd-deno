@@ -32,12 +32,16 @@ console.log('Setting up routes...');
 // Route to get app info
 router.get("/v1/info/:appId", async (ctx: RouterContext<"/v1/info/:appId">) => {
   const { appId } = ctx.params;
+  
+  // Retrieve username and password from headers
+  const username = ctx.request.headers.get('username');
+  const password = ctx.request.headers.get('password');
+  
   logger.info(`Request received for appId ${appId}`);
 
   let data: AppInfo | null = null;
 
   if (config.CACHE_ENABLED) {
-    // Check cache
     data = await cacheRead(appId);
     if (data) {
       logger.info(`Returning cached data for appId ${appId}`);
@@ -48,9 +52,8 @@ router.get("/v1/info/:appId", async (ctx: RouterContext<"/v1/info/:appId">) => {
 
   // Fetch data from Steam
   try {
-    const appInfo = await getAppInfo(Number(appId));
+    const appInfo = await getAppInfo(Number(appId), username ?? "", password ?? "");
     if (appInfo) {
-      // Cache the data if caching is enabled
       if (config.CACHE_ENABLED) {
         await cacheWrite(appId, appInfo);
       }
