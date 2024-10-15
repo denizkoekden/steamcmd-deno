@@ -6,9 +6,6 @@ WORKDIR /app
 USER deno
 
 ################## BEGIN INSTALLATION ######################
-# Set the working directory and switch to the application user
-WORKDIR $HOME
-USER $USER
 
 # Cache the dependencies
 COPY deps.ts .
