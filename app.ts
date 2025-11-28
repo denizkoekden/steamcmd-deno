@@ -1,22 +1,13 @@
-import {
-    Application,
-    Router,
-    RouterContext,
-  } from "https://deno.land/x/oak@v12.5.0/mod.ts";
+import { Application, Router, type RouterContext } from "@oak/oak";
 
-import { log } from "./utils.ts";
 import config from "./config.ts";
 import { cacheRead, cacheWrite } from "./cache.ts";
-import { getAppInfo } from "./functions.ts";
-import { AppInfo } from "./functions.ts";
-
-console.log('Starting the application...');
+import { type AppInfo, getAppInfo } from "./functions.ts";
+import { log } from "./utils.ts";
 
 const logger = log.getLogger("app");
 const app = new Application();
 const router = new Router();
-
-console.log('Setting up middleware...');
 
 // Middleware for logging requests and measuring response time
 app.use(async (ctx, next) => {
@@ -27,16 +18,33 @@ app.use(async (ctx, next) => {
   logger.info(`${ctx.request.method} ${ctx.request.url} - ${ms.toFixed(2)}ms`);
 });
 
-console.log('Setting up routes...');
+router.get("/v1/version", (ctx) => {
+  ctx.response.type = "application/json";
+  ctx.response.body = { version: config.VERSION };
+});
 
-// Route to get app info
 router.get("/v1/info/:appId", async (ctx: RouterContext<"/v1/info/:appId">) => {
   const { appId } = ctx.params;
-  
-  // Retrieve username and password from headers
-  const username = ctx.request.headers.get('username');
-  const password = ctx.request.headers.get('password');
-  
+  const username = ctx.request.headers.get("username") ?? "";
+  const password = ctx.request.headers.get("password") ?? "";
+
+  ctx.response.type = "application/json";
+
+  const parsedAppId = Number.parseInt(appId, 10);
+  if (!Number.isSafeInteger(parsedAppId) || parsedAppId <= 0) {
+    ctx.response.status = 400;
+    ctx.response.body = { error: "appId must be a positive integer." };
+    return;
+  }
+
+  if ((username && !password) || (!username && password)) {
+    ctx.response.status = 400;
+    ctx.response.body = {
+      error: "Provide both username and password or neither.",
+    };
+    return;
+  }
+
   logger.info(`Request received for appId ${appId}`);
 
   let data: AppInfo | null = null;
@@ -45,18 +53,19 @@ router.get("/v1/info/:appId", async (ctx: RouterContext<"/v1/info/:appId">) => {
     data = await cacheRead(appId);
     if (data) {
       logger.info(`Returning cached data for appId ${appId}`);
+      ctx.response.type = "application/json";
       ctx.response.body = data;
       return;
     }
   }
 
-  // Fetch data from Steam
   try {
-    const appInfo = await getAppInfo(Number(appId), username ?? "", password ?? "");
+    const appInfo = await getAppInfo(parsedAppId, username, password);
     if (appInfo) {
       if (config.CACHE_ENABLED) {
         await cacheWrite(appId, appInfo);
       }
+      ctx.response.type = "application/json";
       ctx.response.body = appInfo;
     } else {
       ctx.response.status = 404;
@@ -72,11 +81,8 @@ router.get("/v1/info/:appId", async (ctx: RouterContext<"/v1/info/:appId">) => {
 app.use(router.routes());
 app.use(router.allowedMethods());
 
-app.addEventListener('listen', () => {
+app.addEventListener("listen", () => {
   logger.info(`Server is running on http://localhost:${config.PORT}`);
-  console.log(`Server is running on http://localhost:${config.PORT}`);
 });
-
-console.log('Starting to listen on port', config.PORT);
 
 await app.listen({ port: config.PORT });

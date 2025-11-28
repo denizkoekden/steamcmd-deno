@@ -5,13 +5,16 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./app:/app
+      - .:/app
+    depends_on:
+      - redis
     environment:
       PORT: 8000
       REDIS_HOST: redis
       REDIS_PORT: 6379
       LOG_LEVEL: INFO
       CACHE_EXPIRATION: 120
+      APP_VERSION: dev
     restart: always
   redis:
     image: "redis:6.0"
