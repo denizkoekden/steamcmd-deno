@@ -52,7 +52,7 @@ export async function cacheRead(appId: string): Promise<AppInfo | null> {
       if (parsed && typeof parsed === "object") {
         return parsed;
       }
-      logger.warning(`Invalid cached payload for appId ${appId}`);
+      logger.warn(`Invalid cached payload for appId ${appId}`);
       return null;
     } catch (err) {
       logger.error(`Failed to parse cached data for appId ${appId}: ${err}`);
