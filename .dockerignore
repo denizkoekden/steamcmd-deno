@@ -1,7 +1,8 @@
-node_modules/
-bin/
+.git
+node_modules
+bin
 .env
 .env.local
 .env.*
 .DS_Store
-.deno/
+.deno

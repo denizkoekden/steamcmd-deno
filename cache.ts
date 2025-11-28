@@ -1,14 +1,13 @@
-// cache.ts
-import { connect, Redis } from "https://deno.land/x/redis@v0.29.3/mod.ts";
+import { connect, type Redis } from "@redis";
 import config from "./config.ts";
 import { log } from "./utils.ts";
-import { AppInfo } from "./functions.ts";
+import { type AppInfo } from "./functions.ts";
 
 const logger = log.getLogger("cache");
 
 let redisClient: Redis | null = null;
 
-export async function getRedisClient() {
+export async function getRedisClient(): Promise<Redis | null> {
   if (!config.CACHE_ENABLED) {
     return null;
   }
@@ -42,11 +41,21 @@ export async function cacheRead(appId: string): Promise<AppInfo | null> {
       return null;
     }
     const data = await client.get(appId);
-    if (data) {
-      logger.info(`Cache hit for appId ${appId}`);
-      return JSON.parse(data);
-    } else {
+    if (!data) {
       logger.info(`Cache miss for appId ${appId}`);
+      return null;
+    }
+
+    logger.info(`Cache hit for appId ${appId}`);
+    try {
+      const parsed = JSON.parse(data) as AppInfo;
+      if (parsed && typeof parsed === "object") {
+        return parsed;
+      }
+      logger.warning(`Invalid cached payload for appId ${appId}`);
+      return null;
+    } catch (err) {
+      logger.error(`Failed to parse cached data for appId ${appId}: ${err}`);
       return null;
     }
   } catch (err) {

@@ -1,4 +1,4 @@
-import * as log from "https://deno.land/std@0.196.0/log/mod.ts";
+import * as log from "@std/log";
 import config from "./config.ts";
 
 await log.setup({
@@ -10,15 +10,15 @@ await log.setup({
       level: config.LOG_LEVEL,
       handlers: ["console"],
     },
-    app: { 
+    app: {
       level: config.LOG_LEVEL,
       handlers: ["console"],
     },
-    cache: { 
+    cache: {
       level: config.LOG_LEVEL,
       handlers: ["console"],
     },
-    functions: { 
+    functions: {
       level: config.LOG_LEVEL,
       handlers: ["console"],
     },
