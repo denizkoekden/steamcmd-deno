@@ -93,7 +93,15 @@ export async function getAppInfo(
     new Promise<void>((resolve) =>
       client.once("disconnected", () => resolve())
     );
+  const listenForErrors = () => {
+    const handler = (err: Error) => {
+      logger.error(`Steam client error: ${err?.message ?? err}`);
+    };
+    client.on("error", handler);
+    return () => client.off("error", handler);
+  };
 
+  const unlisten = listenForErrors();
   try {
     await login(!mustAuthenticate);
     let appInfo = await fetchAppInfo();
@@ -116,6 +124,7 @@ export async function getAppInfo(
 
     return appInfo;
   } finally {
+    unlisten();
     client.logOff();
   }
 }

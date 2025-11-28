@@ -9,7 +9,8 @@
     "jsr:@std/log@0.224.0": "0.224.0",
     "npm:@types/node@*": "22.5.4",
     "npm:path-to-regexp@6.2.1": "6.2.1",
-    "npm:steam-user@*": "5.2.0"
+    "npm:steam-user@*": "5.2.3",
+    "npm:steam-user@5.2.3": "5.2.3"
   },
   "jsr": {
     "@std/assert@0.224.0": {
@@ -281,8 +282,8 @@
     "steam-totp@2.1.2": {
       "integrity": "sha512-bTKlc/NoIUQId+my+O556s55DDsNNXfVIPWFDNVu68beql7AJhV0c+GTjFxfwCDYfdc4NkAme+0WrDdnY2D2VA=="
     },
-    "steam-user@5.2.0": {
-      "integrity": "sha512-GzDou8anDZOw0VgkTj6TybnEKjqSktdizz756UtjDBgh1ONnvI8HCw/FXKmpKmFnyf8iTshHcw16ATLC3WLP/Q==",
+    "steam-user@5.2.3": {
+      "integrity": "sha512-6Yzaa0l7fcSRaaJzHjfuqettYqAsrW3+1AEu/cj4M/lgRYXa0DfOAjuWj0/wesfkogwuXNE4N/ZMZvNir8TVtw==",
       "dependencies": [
         "@bbob/parser",
         "@doctormckay/stdlib@2.10.0",
@@ -299,7 +300,8 @@
         "steam-session",
         "steam-totp",
         "steamid@2.1.0",
-        "websocket13"
+        "websocket13",
+        "zstddec"
       ]
     },
     "steamid@1.1.3": {
@@ -329,6 +331,9 @@
         "tiny-typed-emitter",
         "websocket-extensions"
       ]
+    },
+    "zstddec@0.1.0": {
+      "integrity": "sha512-w2NTI8+3l3eeltKAdK8QpiLo/flRAr2p8AGeakfMZOXBxOg9HIu4LVDxBi81sYgVhFhdJjv1OrB5ssI8uFPoLg=="
     }
   },
   "remote": {
@@ -659,7 +664,7 @@
     "dependencies": [
       "jsr:@std/dotenv@0.224.0",
       "jsr:@std/log@0.224.0",
-      "npm:steam-user@5.2.0"
+      "npm:steam-user@5.2.3"
     ]
   }
 }

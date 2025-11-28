@@ -4,7 +4,7 @@
     "@redis": "https://deno.land/x/redis@v0.31.0/mod.ts",
     "@std/dotenv": "jsr:@std/dotenv@0.224.0",
     "@std/log": "jsr:@std/log@0.224.0",
-    "steam-user": "npm:steam-user@5.2.0"
+    "steam-user": "npm:steam-user@5.2.3"
   },
   "nodeModulesDir": "auto",
   "tasks": {
