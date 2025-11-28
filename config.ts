@@ -31,7 +31,7 @@ const allowedLogLevels: LevelName[] = [
   "NOTSET",
   "DEBUG",
   "INFO",
-  "WARNING",
+  "WARN",
   "ERROR",
   "CRITICAL",
 ];

@@ -1,29 +1,30 @@
-import * as log from "@std/log";
+import { ConsoleHandler, getLogger, type LevelName, setup } from "@std/log";
 import config from "./config.ts";
 
-await log.setup({
+const handlerName = "console";
+
+await setup({
   handlers: {
-    console: new log.handlers.ConsoleHandler(config.LOG_LEVEL),
+    [handlerName]: new ConsoleHandler(config.LOG_LEVEL as LevelName),
   },
   loggers: {
     default: {
       level: config.LOG_LEVEL,
-      handlers: ["console"],
+      handlers: [handlerName],
     },
     app: {
       level: config.LOG_LEVEL,
-      handlers: ["console"],
+      handlers: [handlerName],
     },
     cache: {
       level: config.LOG_LEVEL,
-      handlers: ["console"],
+      handlers: [handlerName],
     },
     functions: {
       level: config.LOG_LEVEL,
-      handlers: ["console"],
+      handlers: [handlerName],
     },
   },
 });
 
-// Export the 'log' object directly
-export { log };
+export const log = { getLogger };

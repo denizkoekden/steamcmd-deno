@@ -84,7 +84,7 @@ export async function getAppInfo(
       return data.apps[appId] as AppInfo;
     }
 
-    logger.warning(`No app info found for appId ${appId}`);
+    logger.warn(`No app info found for appId ${appId}`);
     return null;
   };
 
@@ -116,7 +116,7 @@ export async function getAppInfo(
       appInfo = await fetchAppInfo();
 
       if (appInfo && appInfo.missingToken) {
-        logger.warning(
+        logger.warn(
           `App info for appId ${appId} is incomplete, missing token even after anonymous login.`,
         );
       }
