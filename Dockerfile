@@ -12,6 +12,7 @@ RUN deno cache --lock=deno.lock --frozen deps.ts
 
 COPY . .
 RUN deno cache --lock=deno.lock --frozen app.ts
+RUN rm -rf /app/node_modules
 
 USER deno
 
