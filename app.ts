@@ -8,6 +8,7 @@ import { log } from "./utils.ts";
 const logger = log.getLogger("app");
 const app = new Application();
 const router = new Router();
+const inFlight = new Map<string, Promise<AppInfo | null>>();
 
 // Middleware for logging requests and measuring response time
 app.use(async (ctx, next) => {
@@ -60,7 +61,13 @@ router.get("/v1/info/:appId", async (ctx: RouterContext<"/v1/info/:appId">) => {
   }
 
   try {
-    const appInfo = await getAppInfo(parsedAppId, username, password);
+    let appInfoPromise = inFlight.get(appId);
+    if (!appInfoPromise) {
+      appInfoPromise = getAppInfo(parsedAppId, username, password);
+      inFlight.set(appId, appInfoPromise.finally(() => inFlight.delete(appId)));
+    }
+
+    const appInfo = await appInfoPromise;
     if (appInfo) {
       if (config.CACHE_ENABLED) {
         await cacheWrite(appId, appInfo);
