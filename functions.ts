@@ -4,7 +4,9 @@ import { log } from "./utils.ts";
 const logger = log.getLogger("functions");
 
 // Throttle Steam calls to avoid hitting login and request rate limits.
-const REQUEST_DELAY_MS = Number(Deno.env.get("STEAM_REQUEST_DELAY_MS") ?? "1500");
+const REQUEST_DELAY_MS = Number(
+  Deno.env.get("STEAM_REQUEST_DELAY_MS") ?? "1500",
+);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let requestChain: Promise<unknown> = Promise.resolve();
@@ -50,7 +52,7 @@ export async function getAppInfo(
   validateAppId(appId);
   validateCredentials(username, password);
 
-  return enqueueRequest(async () => {
+  return await enqueueRequest(async () => {
     const client = new SteamUser();
 
     const login = async (anonymous: boolean) => {
