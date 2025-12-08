@@ -15,7 +15,7 @@ services:
       LOG_LEVEL: INFO
       CACHE_EXPIRATION: 120
       APP_VERSION: dev
-      STEAM_REQUEST_DELAY_MS: 1500
+      STEAM_REQUEST_DELAY_MS: 0
     restart: always
   redis:
     image: "redis:6.0"

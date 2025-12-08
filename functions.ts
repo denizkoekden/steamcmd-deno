@@ -5,7 +5,7 @@ const logger = log.getLogger("functions");
 
 // Throttle Steam calls to avoid hitting login and request rate limits.
 const REQUEST_DELAY_MS = Number(
-  Deno.env.get("STEAM_REQUEST_DELAY_MS") ?? "1500",
+  Deno.env.get("STEAM_REQUEST_DELAY_MS") ?? "0",
 );
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
