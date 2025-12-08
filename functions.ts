@@ -7,10 +7,13 @@ const logger = log.getLogger("functions");
 const REQUEST_DELAY_MS = Number(
   Deno.env.get("STEAM_REQUEST_DELAY_MS") ?? "0",
 );
+const THROTTLE_ENABLED = REQUEST_DELAY_MS > 0;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let requestChain: Promise<unknown> = Promise.resolve();
 const enqueueRequest = <T>(fn: () => Promise<T>): Promise<T> => {
+  if (!THROTTLE_ENABLED) return fn();
+
   const run = requestChain.then(fn);
   requestChain = run
     .catch(() => undefined)
