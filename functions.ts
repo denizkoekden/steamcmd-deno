@@ -21,6 +21,57 @@ const enqueueRequest = <T>(fn: () => Promise<T>): Promise<T> => {
   return run;
 };
 
+type CredentialsKey = string;
+const clientPromises = new Map<CredentialsKey, Promise<SteamUser>>();
+
+const getClient = (
+  username: string,
+  password: string,
+): Promise<SteamUser> => {
+  const mustAuthenticate = Boolean(username && password);
+  const key = mustAuthenticate ? `${username}::${password}` : "anonymous";
+
+  const existing = clientPromises.get(key);
+  if (existing) return existing;
+
+  const createClient = new Promise<SteamUser>((resolve, reject) => {
+    const client = new SteamUser();
+    const onLoggedOn = () => {
+      client.off("error", onError);
+      // Keep a listener for logging future errors on the persistent client.
+      client.on("error", (err: Error) => {
+        logger.error(
+          `Steam client error (${mustAuthenticate ? "auth" : "anon"}): ${err?.message ?? err}`,
+        );
+      });
+      resolve(client);
+    };
+    const onError = (err: Error) => {
+      client.off("loggedOn", onLoggedOn);
+      reject(err);
+    };
+
+    client.once("loggedOn", onLoggedOn);
+    client.once("error", onError);
+
+    if (mustAuthenticate) {
+      logger.debug("Attempting authenticated login...");
+      client.logOn({ accountName: username, password });
+    } else {
+      logger.debug("Attempting anonymous login...");
+      client.logOn({ anonymous: true });
+    }
+  });
+
+  const trackedClient = createClient.catch((err) => {
+    clientPromises.delete(key);
+    throw err;
+  });
+
+  clientPromises.set(key, trackedClient);
+  return trackedClient;
+};
+
 export interface AppInfo {
   appid: number;
   changenumber: number;
@@ -56,38 +107,7 @@ export async function getAppInfo(
   validateCredentials(username, password);
 
   return await enqueueRequest(async () => {
-    const client = new SteamUser();
-
-    const login = async (anonymous: boolean) => {
-      const loginPromise = new Promise<void>((resolve, reject) => {
-        client.once("loggedOn", () => {
-          logger.debug("Successfully logged in to Steam.");
-          resolve();
-        });
-        client.once("error", (err: Error) => {
-          if (err.message === "LogonSessionReplaced") {
-            logger.debug(
-              "LogonSessionReplaced: Current session was replaced by a new one.",
-            );
-            resolve();
-            return;
-          }
-          reject(err);
-        });
-      });
-
-      if (anonymous) {
-        logger.debug("Attempting anonymous login...");
-        client.logOn({ anonymous: true });
-      } else {
-        logger.debug("Attempting authenticated login...");
-        client.logOn({ accountName: username, password });
-      }
-
-      await loginPromise;
-    };
-
-    const fetchAppInfo = async () => {
+    const fetchAppInfo = async (client: SteamUser) => {
       logger.info(`Fetching product info for appId ${appId}`);
       const data = await client.getProductInfo([appId], [], true);
 
@@ -108,43 +128,23 @@ export async function getAppInfo(
     };
 
     const mustAuthenticate = Boolean(username && password);
-    const waitForDisconnect = () =>
-      new Promise<void>((resolve) =>
-        client.once("disconnected", () => resolve())
+    const client = await getClient(username, password);
+    let appInfo = await fetchAppInfo(client);
+
+    if (appInfo && appInfo.missingToken && mustAuthenticate) {
+      logger.info(
+        `Missing token for appId ${appId}, retrying with anonymous client...`,
       );
-    const listenForErrors = () => {
-      const handler = (err: Error) => {
-        logger.error(`Steam client error: ${err?.message ?? err}`);
-      };
-      client.on("error", handler);
-      return () => client.off("error", handler);
-    };
+      const anonymousClient = await getClient("", "");
+      appInfo = await fetchAppInfo(anonymousClient);
 
-    const unlisten = listenForErrors();
-    try {
-      await login(!mustAuthenticate);
-      let appInfo = await fetchAppInfo();
-
-      if (appInfo && appInfo.missingToken && mustAuthenticate) {
-        logger.info(
-          `Missing token for appId ${appId}, retrying with anonymous login...`,
+      if (appInfo && appInfo.missingToken) {
+        logger.warn(
+          `App info for appId ${appId} is incomplete, missing token even after anonymous login.`,
         );
-        client.logOff();
-        await waitForDisconnect();
-        await login(true);
-        appInfo = await fetchAppInfo();
-
-        if (appInfo && appInfo.missingToken) {
-          logger.warn(
-            `App info for appId ${appId} is incomplete, missing token even after anonymous login.`,
-          );
-        }
       }
-
-      return appInfo;
-    } finally {
-      unlisten();
-      client.logOff();
     }
+
+    return appInfo;
   });
 }

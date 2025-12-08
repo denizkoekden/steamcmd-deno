@@ -9,6 +9,34 @@ const logger = log.getLogger("app");
 const app = new Application();
 const router = new Router();
 const inFlight = new Map<string, Promise<AppInfo | null>>();
+const preloadAppIds = config.PRELOAD_APP_IDS ?? [];
+const preloadUsername = config.PRELOAD_USERNAME ?? "";
+const preloadPassword = config.PRELOAD_PASSWORD ?? "";
+
+const warmCache = async (
+  appIds: number[],
+  username: string,
+  password: string,
+) => {
+  if ((username && !password) || (!username && password)) {
+    logger.error("Prewarm skipped: provide both CACHE_PRELOAD_USERNAME and CACHE_PRELOAD_PASSWORD or neither.");
+    return;
+  }
+
+  for (const id of appIds) {
+    try {
+      const info = await getAppInfo(id, username, password);
+      if (info) {
+        await cacheWrite(`${id}`, info);
+        logger.info(`Prewarmed cache for appId ${id}`);
+      } else {
+        logger.warn(`Prewarm failed, no app info for appId ${id}`);
+      }
+    } catch (err) {
+      logger.error(`Prewarm failed for appId ${id}: ${err}`);
+    }
+  }
+};
 
 // Middleware for logging requests and measuring response time
 app.use(async (ctx, next) => {
@@ -91,5 +119,11 @@ app.use(router.allowedMethods());
 app.addEventListener("listen", () => {
   logger.info(`Server is running on http://localhost:${config.PORT}`);
 });
+
+if (config.CACHE_ENABLED && preloadAppIds.length > 0) {
+  warmCache(preloadAppIds, preloadUsername, preloadPassword).catch((err) =>
+    logger.error(`Cache prewarm failed: ${err}`)
+  );
+}
 
 await app.listen({ port: config.PORT });

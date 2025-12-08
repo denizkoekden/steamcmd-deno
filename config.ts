@@ -8,6 +8,9 @@ interface Config {
   REDIS_PASSWORD?: string;
   CACHE_EXPIRATION: number;
   CACHE_ENABLED: boolean;
+  PRELOAD_APP_IDS: number[];
+  PRELOAD_USERNAME?: string;
+  PRELOAD_PASSWORD?: string;
   LOG_LEVEL: LevelName;
   VERSION: string;
 }
@@ -23,6 +26,14 @@ const parseBoolean = (
 ): boolean => {
   if (value === undefined) return fallback;
   return ["1", "true", "yes", "on"].includes(value.toLowerCase());
+};
+
+const parseAppIds = (value: string | undefined): number[] => {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((v) => Number(v.trim()))
+    .filter((n) => Number.isSafeInteger(n) && n > 0);
 };
 
 await loadEnv({ export: true });
@@ -68,6 +79,9 @@ const config: Config = {
   CACHE_EXPIRATION: safeCacheTtl,
   LOG_LEVEL: envLogLevel,
   CACHE_ENABLED: false,
+  PRELOAD_APP_IDS: parseAppIds(Deno.env.get("CACHE_PRELOAD_APP_IDS")),
+  PRELOAD_USERNAME: Deno.env.get("CACHE_PRELOAD_USERNAME") || undefined,
+  PRELOAD_PASSWORD: Deno.env.get("CACHE_PRELOAD_PASSWORD") || undefined,
   VERSION: Deno.env.get("APP_VERSION") || "0.0.0-dev",
 };
 
