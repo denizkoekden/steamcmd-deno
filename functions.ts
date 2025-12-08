@@ -41,7 +41,9 @@ const getClient = (
       // Keep a listener for logging future errors on the persistent client.
       client.on("error", (err: Error) => {
         logger.error(
-          `Steam client error (${mustAuthenticate ? "auth" : "anon"}): ${err?.message ?? err}`,
+          `Steam client error (${mustAuthenticate ? "auth" : "anon"}): ${
+            err?.message ?? err
+          }`,
         );
       });
       resolve(client);

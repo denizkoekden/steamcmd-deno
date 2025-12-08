@@ -19,7 +19,9 @@ const warmCache = async (
   password: string,
 ) => {
   if ((username && !password) || (!username && password)) {
-    logger.error("Prewarm skipped: provide both CACHE_PRELOAD_USERNAME and CACHE_PRELOAD_PASSWORD or neither.");
+    logger.error(
+      "Prewarm skipped: provide both CACHE_PRELOAD_USERNAME and CACHE_PRELOAD_PASSWORD or neither.",
+    );
     return;
   }
 
