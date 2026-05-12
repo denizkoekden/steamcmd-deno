@@ -21,7 +21,7 @@
     "build_linux_arm": "deno compile --target=aarch64-unknown-linux-gnu --output=bin/steamcmd_linux_arm --allow-net --allow-sys --allow-write --allow-read --allow-env app.ts"
   },
   "compilerOptions": {
-    "lib": ["deno.ns", "dom"]
+    "lib": ["deno.window"]
   },
   "fmt": {
     "useTabs": false,

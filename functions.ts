@@ -1,7 +1,112 @@
 import SteamUser from "steam-user";
+import config from "./config.ts";
 import { log } from "./utils.ts";
 
 const logger = log.getLogger("functions");
+
+const REQUEST_DELAY_MS = config.STEAM_REQUEST_DELAY_MS;
+const REQUEST_TIMEOUT_MS = config.STEAM_REQUEST_TIMEOUT_MS;
+const THROTTLE_ENABLED = REQUEST_DELAY_MS > 0;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+let requestChain: Promise<unknown> = Promise.resolve();
+const enqueueRequest = <T>(fn: () => Promise<T>): Promise<T> => {
+  if (!THROTTLE_ENABLED) return fn();
+
+  const run = requestChain.then(fn);
+  requestChain = run
+    .catch(() => undefined)
+    .then(() => sleep(REQUEST_DELAY_MS));
+  return run;
+};
+
+const withTimeout = <T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms}ms`)),
+      ms,
+    );
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+};
+
+type CredentialsKey = string;
+const clientPromises = new Map<CredentialsKey, Promise<SteamUser>>();
+
+export const buildCredentialsKey = (
+  username: string,
+  password: string,
+): CredentialsKey =>
+  username && password ? `${username}::${password}` : "anonymous";
+
+const getClient = (
+  username: string,
+  password: string,
+): Promise<SteamUser> => {
+  const mustAuthenticate = Boolean(username && password);
+  const key = buildCredentialsKey(username, password);
+
+  const existing = clientPromises.get(key);
+  if (existing) return existing;
+
+  const createClient = new Promise<SteamUser>((resolve, reject) => {
+    const client = new SteamUser();
+
+    const evict = (reason: string) => {
+      const tracked = clientPromises.get(key);
+      if (tracked) {
+        clientPromises.delete(key);
+        logger.warn(
+          `Evicted Steam client (${
+            mustAuthenticate ? "auth" : "anon"
+          }): ${reason}`,
+        );
+      }
+      try {
+        client.logOff();
+      } catch (_) {
+        // ignore — client may already be torn down
+      }
+    };
+
+    const onLoggedOn = () => {
+      client.off("error", onError);
+      client.on("error", (err: Error) => {
+        evict(`error: ${err?.message ?? err}`);
+      });
+      client.on("disconnected", (eresult: number, msg?: string) => {
+        evict(`disconnected (eresult=${eresult}${msg ? `, ${msg}` : ""})`);
+      });
+      resolve(client);
+    };
+    const onError = (err: Error) => {
+      client.off("loggedOn", onLoggedOn);
+      clientPromises.delete(key);
+      reject(err);
+    };
+
+    client.once("loggedOn", onLoggedOn);
+    client.once("error", onError);
+
+    if (mustAuthenticate) {
+      logger.debug("Attempting authenticated login...");
+      client.logOn({ accountName: username, password });
+    } else {
+      logger.debug("Attempting anonymous login...");
+      client.logOn({ anonymous: true });
+    }
+  });
+
+  clientPromises.set(key, createClient);
+  return createClient;
+};
 
 export interface AppInfo {
   appid: number;
@@ -17,17 +122,6 @@ const validateAppId = (appId: number) => {
   }
 };
 
-const validateCredentials = (username: string, password: string) => {
-  if (username && typeof username !== "string") {
-    logger.error(`Invalid username type: ${typeof username}`);
-    throw new Error("Username must be a string.");
-  }
-  if (password && typeof password !== "string") {
-    logger.error(`Invalid password type: ${typeof password}`);
-    throw new Error("Password must be a string.");
-  }
-};
-
 export async function getAppInfo(
   appId: number,
   username: string,
@@ -35,42 +129,16 @@ export async function getAppInfo(
 ): Promise<AppInfo | null> {
   logger.info(`Started requesting app info for appId ${appId}`);
   validateAppId(appId);
-  validateCredentials(username, password);
 
-  const client = new SteamUser();
-
-  const login = async (anonymous: boolean) => {
-    const loginPromise = new Promise<void>((resolve, reject) => {
-      client.once("loggedOn", () => {
-        logger.debug("Successfully logged in to Steam.");
-        resolve();
-      });
-      client.once("error", (err: Error) => {
-        if (err.message === "LogonSessionReplaced") {
-          logger.debug(
-            "LogonSessionReplaced: Current session was replaced by a new one.",
-          );
-          resolve();
-          return;
-        }
-        reject(err);
-      });
-    });
-
-    if (anonymous) {
-      logger.debug("Attempting anonymous login...");
-      client.logOn({ anonymous: true });
-    } else {
-      logger.debug("Attempting authenticated login...");
-      client.logOn({ accountName: username, password });
-    }
-
-    await loginPromise;
-  };
-
-  const fetchAppInfo = async () => {
+  return await enqueueRequest(async () => {
+    const client = await getClient(username, password);
     logger.info(`Fetching product info for appId ${appId}`);
-    const data = await client.getProductInfo([appId], [], true);
+
+    const data = await withTimeout(
+      client.getProductInfo([appId], [], true),
+      REQUEST_TIMEOUT_MS,
+      `getProductInfo(${appId})`,
+    ) as { apps?: Record<number, AppInfo> } | undefined;
 
     if (!data || typeof data !== "object") {
       logger.error("Invalid response received from getProductInfo.");
@@ -79,52 +147,13 @@ export async function getAppInfo(
 
     logger.debug(`Raw product info: ${JSON.stringify(data)}`);
 
-    if (data.apps && data.apps[appId]) {
+    const appInfo = data.apps?.[appId];
+    if (appInfo) {
       logger.info(`Successfully retrieved app info for appId ${appId}`);
-      return data.apps[appId] as AppInfo;
+      return appInfo;
     }
 
     logger.warn(`No app info found for appId ${appId}`);
     return null;
-  };
-
-  const mustAuthenticate = Boolean(username && password);
-  const waitForDisconnect = () =>
-    new Promise<void>((resolve) =>
-      client.once("disconnected", () => resolve())
-    );
-  const listenForErrors = () => {
-    const handler = (err: Error) => {
-      logger.error(`Steam client error: ${err?.message ?? err}`);
-    };
-    client.on("error", handler);
-    return () => client.off("error", handler);
-  };
-
-  const unlisten = listenForErrors();
-  try {
-    await login(!mustAuthenticate);
-    let appInfo = await fetchAppInfo();
-
-    if (appInfo && appInfo.missingToken && mustAuthenticate) {
-      logger.info(
-        `Missing token for appId ${appId}, retrying with anonymous login...`,
-      );
-      client.logOff();
-      await waitForDisconnect();
-      await login(true);
-      appInfo = await fetchAppInfo();
-
-      if (appInfo && appInfo.missingToken) {
-        logger.warn(
-          `App info for appId ${appId} is incomplete, missing token even after anonymous login.`,
-        );
-      }
-    }
-
-    return appInfo;
-  } finally {
-    unlisten();
-    client.logOff();
-  }
+  });
 }
