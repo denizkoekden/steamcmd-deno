@@ -1,12 +1,11 @@
 import SteamUser from "steam-user";
+import config from "./config.ts";
 import { log } from "./utils.ts";
 
 const logger = log.getLogger("functions");
 
-// Throttle Steam calls to avoid hitting login and request rate limits.
-const REQUEST_DELAY_MS = Number(
-  Deno.env.get("STEAM_REQUEST_DELAY_MS") ?? "0",
-);
+const REQUEST_DELAY_MS = config.STEAM_REQUEST_DELAY_MS;
+const REQUEST_TIMEOUT_MS = config.STEAM_REQUEST_TIMEOUT_MS;
 const THROTTLE_ENABLED = REQUEST_DELAY_MS > 0;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -21,35 +20,75 @@ const enqueueRequest = <T>(fn: () => Promise<T>): Promise<T> => {
   return run;
 };
 
+const withTimeout = <T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms}ms`)),
+      ms,
+    );
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+};
+
 type CredentialsKey = string;
 const clientPromises = new Map<CredentialsKey, Promise<SteamUser>>();
+
+export const buildCredentialsKey = (
+  username: string,
+  password: string,
+): CredentialsKey =>
+  username && password ? `${username}::${password}` : "anonymous";
 
 const getClient = (
   username: string,
   password: string,
 ): Promise<SteamUser> => {
   const mustAuthenticate = Boolean(username && password);
-  const key = mustAuthenticate ? `${username}::${password}` : "anonymous";
+  const key = buildCredentialsKey(username, password);
 
   const existing = clientPromises.get(key);
   if (existing) return existing;
 
   const createClient = new Promise<SteamUser>((resolve, reject) => {
     const client = new SteamUser();
+
+    const evict = (reason: string) => {
+      const tracked = clientPromises.get(key);
+      if (tracked) {
+        clientPromises.delete(key);
+        logger.warn(
+          `Evicted Steam client (${
+            mustAuthenticate ? "auth" : "anon"
+          }): ${reason}`,
+        );
+      }
+      try {
+        client.logOff();
+      } catch (_) {
+        // ignore — client may already be torn down
+      }
+    };
+
     const onLoggedOn = () => {
       client.off("error", onError);
-      // Keep a listener for logging future errors on the persistent client.
       client.on("error", (err: Error) => {
-        logger.error(
-          `Steam client error (${mustAuthenticate ? "auth" : "anon"}): ${
-            err?.message ?? err
-          }`,
-        );
+        evict(`error: ${err?.message ?? err}`);
+      });
+      client.on("disconnected", (eresult: number, msg?: string) => {
+        evict(`disconnected (eresult=${eresult}${msg ? `, ${msg}` : ""})`);
       });
       resolve(client);
     };
     const onError = (err: Error) => {
       client.off("loggedOn", onLoggedOn);
+      clientPromises.delete(key);
       reject(err);
     };
 
@@ -65,13 +104,8 @@ const getClient = (
     }
   });
 
-  const trackedClient = createClient.catch((err) => {
-    clientPromises.delete(key);
-    throw err;
-  });
-
-  clientPromises.set(key, trackedClient);
-  return trackedClient;
+  clientPromises.set(key, createClient);
+  return createClient;
 };
 
 export interface AppInfo {
@@ -88,17 +122,6 @@ const validateAppId = (appId: number) => {
   }
 };
 
-const validateCredentials = (username: string, password: string) => {
-  if (username && typeof username !== "string") {
-    logger.error(`Invalid username type: ${typeof username}`);
-    throw new Error("Username must be a string.");
-  }
-  if (password && typeof password !== "string") {
-    logger.error(`Invalid password type: ${typeof password}`);
-    throw new Error("Password must be a string.");
-  }
-};
-
 export async function getAppInfo(
   appId: number,
   username: string,
@@ -106,47 +129,31 @@ export async function getAppInfo(
 ): Promise<AppInfo | null> {
   logger.info(`Started requesting app info for appId ${appId}`);
   validateAppId(appId);
-  validateCredentials(username, password);
 
   return await enqueueRequest(async () => {
-    const fetchAppInfo = async (client: SteamUser) => {
-      logger.info(`Fetching product info for appId ${appId}`);
-      const data = await client.getProductInfo([appId], [], true);
-
-      if (!data || typeof data !== "object") {
-        logger.error("Invalid response received from getProductInfo.");
-        throw new Error("Unexpected response format.");
-      }
-
-      logger.debug(`Raw product info: ${JSON.stringify(data)}`);
-
-      if (data.apps && data.apps[appId]) {
-        logger.info(`Successfully retrieved app info for appId ${appId}`);
-        return data.apps[appId] as AppInfo;
-      }
-
-      logger.warn(`No app info found for appId ${appId}`);
-      return null;
-    };
-
-    const mustAuthenticate = Boolean(username && password);
     const client = await getClient(username, password);
-    let appInfo = await fetchAppInfo(client);
+    logger.info(`Fetching product info for appId ${appId}`);
 
-    if (appInfo && appInfo.missingToken && mustAuthenticate) {
-      logger.info(
-        `Missing token for appId ${appId}, retrying with anonymous client...`,
-      );
-      const anonymousClient = await getClient("", "");
-      appInfo = await fetchAppInfo(anonymousClient);
+    const data = await withTimeout(
+      client.getProductInfo([appId], [], true),
+      REQUEST_TIMEOUT_MS,
+      `getProductInfo(${appId})`,
+    ) as { apps?: Record<number, AppInfo> } | undefined;
 
-      if (appInfo && appInfo.missingToken) {
-        logger.warn(
-          `App info for appId ${appId} is incomplete, missing token even after anonymous login.`,
-        );
-      }
+    if (!data || typeof data !== "object") {
+      logger.error("Invalid response received from getProductInfo.");
+      throw new Error("Unexpected response format.");
     }
 
-    return appInfo;
+    logger.debug(`Raw product info: ${JSON.stringify(data)}`);
+
+    const appInfo = data.apps?.[appId];
+    if (appInfo) {
+      logger.info(`Successfully retrieved app info for appId ${appId}`);
+      return appInfo;
+    }
+
+    logger.warn(`No app info found for appId ${appId}`);
+    return null;
   });
 }

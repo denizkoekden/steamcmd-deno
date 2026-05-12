@@ -1,8 +1,8 @@
 import { Application, Router, type RouterContext } from "@oak/oak";
 
 import config from "./config.ts";
-import { cacheRead, cacheWrite } from "./cache.ts";
-import { type AppInfo, getAppInfo } from "./functions.ts";
+import { cacheRead, cacheWrite, getAuthFlag, setAuthFlag } from "./cache.ts";
+import { type AppInfo, buildCredentialsKey, getAppInfo } from "./functions.ts";
 import { log } from "./utils.ts";
 
 const logger = log.getLogger("app");
@@ -12,6 +12,28 @@ const inFlight = new Map<string, Promise<AppInfo | null>>();
 const preloadAppIds = config.PRELOAD_APP_IDS ?? [];
 const preloadUsername = config.PRELOAD_USERNAME ?? "";
 const preloadPassword = config.PRELOAD_PASSWORD ?? "";
+
+const parseBasicAuth = (
+  header: string | null,
+): { username: string; password: string } => {
+  if (!header) return { username: "", password: "" };
+  const [scheme, encoded] = header.split(" ", 2);
+  if (!encoded || scheme.toLowerCase() !== "basic") {
+    return { username: "", password: "" };
+  }
+  let decoded: string;
+  try {
+    decoded = atob(encoded);
+  } catch {
+    return { username: "", password: "" };
+  }
+  const sep = decoded.indexOf(":");
+  if (sep === -1) return { username: "", password: "" };
+  return {
+    username: decoded.slice(0, sep),
+    password: decoded.slice(sep + 1),
+  };
+};
 
 const warmCache = async (
   appIds: number[],
@@ -25,12 +47,42 @@ const warmCache = async (
     return;
   }
 
+  const hasAuth = Boolean(username && password);
+
   for (const id of appIds) {
+    const idKey = `${id}`;
     try {
-      const info = await getAppInfo(id, username, password);
+      const knownFlag = await getAuthFlag(idKey);
+      let info: AppInfo | null = null;
+      let source: "anon" | "auth" = "anon";
+
+      if (knownFlag === "auth" && hasAuth) {
+        info = await getAppInfo(id, username, password);
+        source = "auth";
+      } else {
+        info = await getAppInfo(id, "", "");
+        if (info?.missingToken && hasAuth) {
+          logger.info(
+            `Prewarm appId ${id}: missingToken on anon, retrying authenticated`,
+          );
+          const authInfo = await getAppInfo(id, username, password);
+          if (authInfo) {
+            info = authInfo;
+            source = "auth";
+          }
+        }
+        if (info) {
+          await setAuthFlag(idKey, info.missingToken ? "auth" : "anon");
+        }
+      }
+
       if (info) {
-        await cacheWrite(`${id}`, info);
-        logger.info(`Prewarmed cache for appId ${id}`);
+        await cacheWrite(idKey, info);
+        const flag = info.missingToken ? ", still missingToken" : "";
+        const cached = knownFlag ? `, flag=${knownFlag}` : "";
+        logger.info(
+          `Prewarmed cache for appId ${id} (${source}${flag}${cached})`,
+        );
       } else {
         logger.warn(`Prewarm failed, no app info for appId ${id}`);
       }
@@ -40,7 +92,6 @@ const warmCache = async (
   }
 };
 
-// Middleware for logging requests and measuring response time
 app.use(async (ctx, next) => {
   const start = performance.now();
   await next();
@@ -56,8 +107,9 @@ router.get("/v1/version", (ctx) => {
 
 router.get("/v1/info/:appId", async (ctx: RouterContext<"/v1/info/:appId">) => {
   const { appId } = ctx.params;
-  const username = ctx.request.headers.get("username") ?? "";
-  const password = ctx.request.headers.get("password") ?? "";
+  const { username, password } = parseBasicAuth(
+    ctx.request.headers.get("authorization"),
+  );
 
   ctx.response.type = "application/json";
 
@@ -68,15 +120,10 @@ router.get("/v1/info/:appId", async (ctx: RouterContext<"/v1/info/:appId">) => {
     return;
   }
 
-  if ((username && !password) || (!username && password)) {
-    ctx.response.status = 400;
-    ctx.response.body = {
-      error: "Provide both username and password or neither.",
-    };
-    return;
-  }
-
   logger.info(`Request received for appId ${appId}`);
+
+  const credentialsKey = buildCredentialsKey(username, password);
+  const inFlightKey = `${appId}::${credentialsKey}`;
 
   let data: AppInfo | null = null;
 
@@ -84,17 +131,19 @@ router.get("/v1/info/:appId", async (ctx: RouterContext<"/v1/info/:appId">) => {
     data = await cacheRead(appId);
     if (data) {
       logger.info(`Returning cached data for appId ${appId}`);
-      ctx.response.type = "application/json";
       ctx.response.body = data;
       return;
     }
   }
 
   try {
-    let appInfoPromise = inFlight.get(appId);
+    let appInfoPromise = inFlight.get(inFlightKey);
     if (!appInfoPromise) {
       appInfoPromise = getAppInfo(parsedAppId, username, password);
-      inFlight.set(appId, appInfoPromise.finally(() => inFlight.delete(appId)));
+      inFlight.set(
+        inFlightKey,
+        appInfoPromise.finally(() => inFlight.delete(inFlightKey)),
+      );
     }
 
     const appInfo = await appInfoPromise;
@@ -102,7 +151,6 @@ router.get("/v1/info/:appId", async (ctx: RouterContext<"/v1/info/:appId">) => {
       if (config.CACHE_ENABLED) {
         await cacheWrite(appId, appInfo);
       }
-      ctx.response.type = "application/json";
       ctx.response.body = appInfo;
     } else {
       ctx.response.status = 404;
@@ -123,9 +171,19 @@ app.addEventListener("listen", () => {
 });
 
 if (config.CACHE_ENABLED && preloadAppIds.length > 0) {
-  warmCache(preloadAppIds, preloadUsername, preloadPassword).catch((err) =>
-    logger.error(`Cache prewarm failed: ${err}`)
-  );
+  const runPrewarm = () =>
+    warmCache(preloadAppIds, preloadUsername, preloadPassword).catch((err) =>
+      logger.error(`Cache prewarm failed: ${err}`)
+    );
+
+  runPrewarm();
+
+  if (config.PRELOAD_INTERVAL_MS > 0) {
+    setInterval(runPrewarm, config.PRELOAD_INTERVAL_MS);
+    logger.info(
+      `Periodic prewarm scheduled every ${config.PRELOAD_INTERVAL_MS}ms for ${preloadAppIds.length} appId(s)`,
+    );
+  }
 }
 
 await app.listen({ port: config.PORT });

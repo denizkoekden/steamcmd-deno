@@ -11,6 +11,9 @@ interface Config {
   PRELOAD_APP_IDS: number[];
   PRELOAD_USERNAME?: string;
   PRELOAD_PASSWORD?: string;
+  PRELOAD_INTERVAL_MS: number;
+  STEAM_REQUEST_TIMEOUT_MS: number;
+  STEAM_REQUEST_DELAY_MS: number;
   LOG_LEVEL: LevelName;
   VERSION: string;
 }
@@ -64,12 +67,35 @@ const safePort = parsedPort > 0 && parsedPort < 65536
   ? parsedPort
   : portFallback;
 
-const cacheTtlFallback = 3600;
+const cacheTtlFallback = 600;
 const parsedCacheTtl = parseNumber(
   Deno.env.get("CACHE_EXPIRATION"),
   cacheTtlFallback,
 );
 const safeCacheTtl = parsedCacheTtl > 0 ? parsedCacheTtl : cacheTtlFallback;
+
+const requestTimeoutFallback = 15000;
+const parsedRequestTimeout = parseNumber(
+  Deno.env.get("STEAM_REQUEST_TIMEOUT_MS"),
+  requestTimeoutFallback,
+);
+const safeRequestTimeout = parsedRequestTimeout > 0
+  ? parsedRequestTimeout
+  : requestTimeoutFallback;
+
+const parsedRequestDelay = parseNumber(
+  Deno.env.get("STEAM_REQUEST_DELAY_MS"),
+  0,
+);
+const safeRequestDelay = parsedRequestDelay >= 0 ? parsedRequestDelay : 0;
+
+const parsedPreloadInterval = parseNumber(
+  Deno.env.get("CACHE_PRELOAD_INTERVAL_MS"),
+  Math.floor((safeCacheTtl * 1000) / 2),
+);
+const safePreloadInterval = parsedPreloadInterval > 0
+  ? parsedPreloadInterval
+  : 0;
 
 const config: Config = {
   PORT: safePort,
@@ -82,6 +108,9 @@ const config: Config = {
   PRELOAD_APP_IDS: parseAppIds(Deno.env.get("CACHE_PRELOAD_APP_IDS")),
   PRELOAD_USERNAME: Deno.env.get("CACHE_PRELOAD_USERNAME") || undefined,
   PRELOAD_PASSWORD: Deno.env.get("CACHE_PRELOAD_PASSWORD") || undefined,
+  PRELOAD_INTERVAL_MS: safePreloadInterval,
+  STEAM_REQUEST_TIMEOUT_MS: safeRequestTimeout,
+  STEAM_REQUEST_DELAY_MS: safeRequestDelay,
   VERSION: Deno.env.get("APP_VERSION") || "0.0.0-dev",
 };
 
