@@ -140,12 +140,25 @@ export async function getAppInfo(
 
     if (betaPassword) {
       try {
-        await withTimeout(
-          client.getAppBetaDecryptionKeys(appId, betaPassword),
+        const result = await withTimeout(
+          client.getAppBetaDecryptionKeys(appId, betaPassword) as Promise<
+            { keys?: Record<string, unknown> }
+          >,
           REQUEST_TIMEOUT_MS,
           `getAppBetaDecryptionKeys(${appId})`,
         );
-        logger.info(`Registered beta password for appId ${appId}`);
+        const branches = Object.keys(result?.keys ?? {});
+        if (branches.length === 0) {
+          logger.warn(
+            `Beta password accepted by Steam for appId ${appId} but no branch keys returned (likely wrong password)`,
+          );
+        } else {
+          logger.info(
+            `Registered beta password for appId ${appId}; unlocked branches: ${
+              branches.join(", ")
+            }`,
+          );
+        }
       } catch (err) {
         logger.warn(
           `getAppBetaDecryptionKeys failed for appId ${appId}: ${err}`,
