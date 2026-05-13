@@ -270,17 +270,17 @@ const getAppInfoViaSteamCmd = async (
     );
     const changenumber = changeMatch ? Number(changeMatch[1]) : 0;
 
-    const marker = `"${appId}"`;
-    const lastIdx = out.lastIndexOf(marker);
-    if (lastIdx === -1) {
+    // Match only the outer block `"<appid>"\s*{`, not field values such as
+    // `"gameid" "<appid>"` inside the `common` section — those share the same
+    // numeric string but are followed by another `"key"` rather than `{`.
+    const blockRegex = new RegExp(`"${appId}"\\s*\\{`, "g");
+    const matches = [...out.matchAll(blockRegex)];
+    const lastMatch = matches[matches.length - 1];
+    if (!lastMatch || lastMatch.index === undefined) {
       logger.warn(`steamcmd output for appId ${appId} contains no app block`);
       return null;
     }
-    const braceStart = out.indexOf("{", lastIdx);
-    if (braceStart === -1) {
-      logger.warn(`steamcmd output for appId ${appId} malformed`);
-      return null;
-    }
+    const braceStart = lastMatch.index + lastMatch[0].length - 1;
     let depth = 0;
     let braceEnd = -1;
     for (let i = braceStart; i < out.length; i++) {
@@ -299,7 +299,7 @@ const getAppInfoViaSteamCmd = async (
       return null;
     }
 
-    const vdfText = `${marker}\n${out.slice(braceStart, braceEnd + 1)}`;
+    const vdfText = `"${appId}"\n${out.slice(braceStart, braceEnd + 1)}`;
     let parsed: Record<string, unknown>;
     try {
       parsed = parseVdf(vdfText);
