@@ -1,20 +1,21 @@
 # SteamCMD Deno API
 
 This project provides a Deno-based API for querying Steam application data using
-the `steam-user` npm package. It supports Redis caching, Steam account
-authentication, and can be deployed across multiple platforms. The API allows
-fetching detailed information about Steam apps by their `appId`, with fallback
-support for anonymous queries.
+a forked
+[`@denizkoekden/steam-user`](https://www.npmjs.com/package/@denizkoekden/steam-user)
+npm package that adds support for `CMsgClientPICSPrivateBetaRequest` (the new
+protocol message required since Valve's Nov 2024 server change to resolve
+password-protected branches). Supports Redis caching, Steam account
+authentication, and can be deployed across multiple platforms.
 
 ## Features
 
 - Query Steam app data using the Steam Client protocol, supporting both
   authenticated and anonymous logins.
 - Resolve **private/beta branch metadata** (e.g. `development` branch buildid)
-  by registering a branch password via the `X-Steam-Beta-Password` header. The
-  API automatically falls back to a bundled `steamcmd` invocation for this case,
-  since Steam no longer exposes private branch data via the standard PICS
-  protocol since Nov 2024.
+  natively via the Steam Client protocol — no `steamcmd` subprocess required.
+  Send the branch name + password as headers and the API merges the unlocked
+  branch into the standard `appinfo.depots.branches` response.
 - Cache responses in Redis to improve performance.
 - Multi-platform support with Deno's compile feature.
 - Customizable login behavior based on credentials sent via headers.
@@ -136,27 +137,32 @@ whether using authenticated or anonymous login.
 
 Since November 2024, Valve strips the metadata (`buildid`, `timeupdated`, ...)
 of password-protected branches from the standard PICS protocol response. Only a
-top-level `appinfo.depots.privatebranches = "1"` marker remains. Resolving the
-hidden branch requires the new `CMsgClientPICSPrivateBetaRequest` protocol
-message, which the `steam-user` npm package does not implement.
+top-level `appinfo.depots.privatebranches = "1"` marker remains in the public
+response. Resolving the hidden branch requires the dedicated
+`CMsgClientPICSPrivateBetaRequest` protocol message
+([EMsg 8907](https://github.com/SteamRE/SteamKit/blob/master/Resources/SteamLanguage/emsg.steamd))
+that modern steamcmd uses internally.
 
-To work around this, the API shells out to a bundled `steamcmd` binary **only
-when a branch password is supplied**. Public/authenticated requests without a
-beta password continue to use the fast `steam-user` path.
+This API runs on a forked
+[`@denizkoekden/steam-user`](https://github.com/denizkoekden/node-steam-user/tree/feat/private-beta-support)
+that implements the protocol message natively — no `steamcmd` subprocess, no
+extra binary dependency. When a branch name + password are supplied, the API
+internally chains:
+
+1. `CMsgClientCheckAppBetaPassword` → validate the password and obtain the
+   per-branch decryption hash bytes returned by Steam.
+2. `CMsgClientPICSAccessTokenRequest` → fetch the app's access token (falls back
+   to `0` for free dedicated-server apps).
+3. `CMsgClientPICSPrivateBetaRequest` → retrieve the private branch's depot
+   section (a text-VDF blob) and merge it back into `appinfo.depots.branches` so
+   the response shape remains identical to the pre-Nov-2024 behavior.
+
+Total round-trip is typically **under 1 second**.
 
 ### Requesting a Private Branch
 
 Send the branch **name** and **password** as request headers (or as
-`?beta_branch=`/`?beta_password=` query parameters). **Both are required** —
-modern steamcmd has switched to a named-flag form:
-
-```text
-set_app_beta_password <appid> -beta <branch> -betapassword <pwd>
-```
-
-The legacy two-arg form silently fails. The response shape is identical to a
-normal request — the unlocked branch simply appears inside
-`appinfo.depots.branches`.
+`?beta_branch=`/`?beta_password=` query parameters). Both are required.
 
 ```bash
 # Anonymous + beta password
@@ -179,26 +185,12 @@ The relevant `buildid` is then at:
 appinfo.depots.branches.<branchname>.buildid
 ```
 
-### steamcmd Configuration
+### Caching
 
-The bundled Docker image installs `steamcmd` to `/opt/steamcmd/steamcmd.sh` and
-sets `STEAMCMD_PATH` automatically. For bare-metal Deno deployments, install
-`steamcmd` yourself and configure:
-
-```bash
-STEAMCMD_PATH=/usr/games/steamcmd      # or wherever steamcmd lives
-STEAMCMD_TIMEOUT_MS=60000              # optional, default 60s
-```
-
-### Performance and Caveats
-
-- A `steamcmd` invocation takes roughly **5–15 seconds** (login + app info
-  fetch). The first call after build is slower because steamcmd self-updates.
-- Responses are cached in Redis under a separate key
-  (`<appId>::beta:<password>`) so the public branch cache is never polluted with
-  branch-specific data.
-- Concurrent `steamcmd` invocations are serialized internally to avoid
-  corrupting steamcmd's shared content directory state.
+Responses for password-protected requests are cached in Redis under a separate
+key (`<appId>::beta:<branch>:<password>`) so the public branch cache is never
+polluted with private-branch data and concurrent callers with different
+passwords don't collide.
 
 ## Building Binaries
 

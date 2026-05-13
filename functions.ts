@@ -122,243 +122,6 @@ const validateAppId = (appId: number) => {
   }
 };
 
-// Minimal VDF/KeyValues parser sufficient for `app_info_print` output.
-// Supports nested `"key" "value"` and `"key" { ... }` only — no macros, no
-// includes, no comments (steamcmd's dump emits none of those).
-const parseVdf = (text: string): Record<string, unknown> => {
-  let pos = 0;
-  const skip = () => {
-    while (pos < text.length) {
-      const ch = text[pos];
-      if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") pos++;
-      else break;
-    }
-  };
-  const readString = (): string => {
-    skip();
-    if (text[pos] !== '"') {
-      throw new Error(
-        `VDF: expected '"' at ${pos}, got '${text[pos] ?? "EOF"}'`,
-      );
-    }
-    pos++;
-    let s = "";
-    while (pos < text.length && text[pos] !== '"') {
-      if (text[pos] === "\\" && pos + 1 < text.length) {
-        const next = text[pos + 1];
-        if (next === "n") s += "\n";
-        else if (next === "t") s += "\t";
-        else if (next === "r") s += "\r";
-        else if (next === "\\") s += "\\";
-        else if (next === '"') s += '"';
-        else s += next;
-        pos += 2;
-      } else {
-        s += text[pos];
-        pos++;
-      }
-    }
-    if (text[pos] !== '"') throw new Error("VDF: unterminated string");
-    pos++;
-    return s;
-  };
-  const parseObj = (): Record<string, unknown> => {
-    skip();
-    if (text[pos] !== "{") throw new Error(`VDF: expected '{' at ${pos}`);
-    pos++;
-    const obj: Record<string, unknown> = {};
-    skip();
-    while (pos < text.length && text[pos] !== "}") {
-      const key = readString();
-      skip();
-      obj[key] = text[pos] === "{" ? parseObj() : readString();
-      skip();
-    }
-    if (text[pos] !== "}") throw new Error("VDF: unterminated object");
-    pos++;
-    return obj;
-  };
-  const root: Record<string, unknown> = {};
-  skip();
-  while (pos < text.length) {
-    const key = readString();
-    skip();
-    root[key] = text[pos] === "{" ? parseObj() : readString();
-    skip();
-  }
-  return root;
-};
-
-// Serialize steamcmd invocations — Steam content directory state is shared
-// across concurrent steamcmd processes and can corrupt under contention.
-let steamcmdChain: Promise<unknown> = Promise.resolve();
-const enqueueSteamCmd = <T>(fn: () => Promise<T>): Promise<T> => {
-  const run = steamcmdChain.then(fn, fn);
-  steamcmdChain = run.catch(() => undefined);
-  return run;
-};
-
-const getAppInfoViaSteamCmd = async (
-  appId: number,
-  username: string,
-  password: string,
-  betaBranch: string,
-  betaPassword: string,
-): Promise<AppInfo | null> => {
-  const steamcmdPath = config.STEAMCMD_PATH;
-  if (!steamcmdPath) {
-    logger.error(
-      `STEAMCMD_PATH not configured; cannot resolve beta branch for appId ${appId}`,
-    );
-    return null;
-  }
-  if (!betaBranch) {
-    logger.error(
-      `Beta branch name missing for appId ${appId}; steamcmd's set_app_beta_password requires '-beta <name> -betapassword <pwd>'. Send X-Steam-Beta-Branch alongside X-Steam-Beta-Password.`,
-    );
-    return null;
-  }
-
-  return await enqueueSteamCmd(async () => {
-    const args: string[] = [
-      "+@ShutdownOnFailedCommand",
-      "0",
-      "+@NoPromptForPassword",
-      "1",
-    ];
-    if (username && password) {
-      args.push("+login", username, password);
-    } else {
-      args.push("+login", "anonymous");
-    }
-    // Current steamcmd requires named flags; the legacy two-arg form
-    // `set_app_beta_password <appid> <password>` only prints usage and
-    // silently fails to register the password.
-    args.push(
-      "+set_app_beta_password",
-      String(appId),
-      "-beta",
-      betaBranch,
-      "-betapassword",
-      betaPassword,
-    );
-    // app_info_request marks the app for immediate refresh; the subsequent
-    // app_info_print calls then receive fresh server data that reflects the
-    // beta-password unlock. The second print is a workaround for steamcmd's
-    // pattern where the first call may still return cached (pre-password)
-    // data — the second reliably includes the unlocked branch.
-    args.push("+app_info_request", String(appId));
-    args.push("+app_info_print", String(appId));
-    args.push("+app_info_print", String(appId));
-    args.push("+quit");
-
-    logger.info(`Spawning steamcmd for appId ${appId}`);
-    const cmd = new Deno.Command(steamcmdPath, {
-      args,
-      stdout: "piped",
-      stderr: "piped",
-    });
-    const proc = cmd.spawn();
-    const timer = setTimeout(() => {
-      try {
-        proc.kill("SIGTERM");
-      } catch (_) {
-        // already exited
-      }
-    }, config.STEAMCMD_TIMEOUT_MS);
-
-    let output: { code: number; stdout: Uint8Array; stderr: Uint8Array };
-    try {
-      output = await proc.output();
-    } finally {
-      clearTimeout(timer);
-    }
-
-    const out = new TextDecoder().decode(output.stdout);
-    const errOut = new TextDecoder().decode(output.stderr);
-
-    if (output.code !== 0) {
-      logger.warn(
-        `steamcmd exited ${output.code} for appId ${appId}: ${
-          errOut.slice(0, 400) || "(no stderr)"
-        }`,
-      );
-    }
-
-    logger.debug(
-      `steamcmd stdout for appId ${appId} (first 2000 chars):\n${
-        out.slice(0, 2000)
-      }`,
-    );
-
-    const changeMatch = out.match(
-      /AppID\s*:\s*\d+,\s*change number\s*:\s*(\d+)/,
-    );
-    const changenumber = changeMatch ? Number(changeMatch[1]) : 0;
-
-    // Match only the outer block `"<appid>"\s*{`, not field values such as
-    // `"gameid" "<appid>"` inside the `common` section — those share the same
-    // numeric string but are followed by another `"key"` rather than `{`.
-    const blockRegex = new RegExp(`"${appId}"\\s*\\{`, "g");
-    const matches = [...out.matchAll(blockRegex)];
-    const lastMatch = matches[matches.length - 1];
-    if (!lastMatch || lastMatch.index === undefined) {
-      logger.warn(`steamcmd output for appId ${appId} contains no app block`);
-      return null;
-    }
-    const braceStart = lastMatch.index + lastMatch[0].length - 1;
-    let depth = 0;
-    let braceEnd = -1;
-    for (let i = braceStart; i < out.length; i++) {
-      const c = out[i];
-      if (c === "{") depth++;
-      else if (c === "}") {
-        depth--;
-        if (depth === 0) {
-          braceEnd = i;
-          break;
-        }
-      }
-    }
-    if (braceEnd === -1) {
-      logger.warn(`steamcmd output for appId ${appId} has unmatched braces`);
-      return null;
-    }
-
-    const vdfText = `"${appId}"\n${out.slice(braceStart, braceEnd + 1)}`;
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = parseVdf(vdfText);
-    } catch (e) {
-      logger.error(`VDF parse failed for appId ${appId}: ${e}`);
-      return null;
-    }
-
-    const body = parsed[String(appId)] as Record<string, unknown> | undefined;
-    if (!body || typeof body !== "object") {
-      logger.warn(`No body in parsed VDF for appId ${appId}`);
-      return null;
-    }
-
-    const depots = body.depots as
-      | { branches?: Record<string, unknown> }
-      | undefined;
-    const branches = depots?.branches ?? {};
-    logger.info(
-      `steamcmd resolved appId ${appId} (changenumber=${changenumber}); branches: ${
-        Object.keys(branches).join(", ") || "(none)"
-      }`,
-    );
-
-    return {
-      appid: appId,
-      changenumber,
-      missingToken: false,
-      appinfo: { appid: String(appId), ...body },
-    };
-  });
-};
-
 export async function getAppInfo(
   appId: number,
   username: string,
@@ -368,22 +131,12 @@ export async function getAppInfo(
 ): Promise<AppInfo | null> {
   validateAppId(appId);
 
-  if (betaPassword) {
-    logger.info(
-      `Started requesting app info for appId ${appId} via steamcmd [branch=${
-        betaBranch || "?"
-      } betaPassword set]`,
-    );
-    return getAppInfoViaSteamCmd(
-      appId,
-      username,
-      password,
-      betaBranch,
-      betaPassword,
-    );
-  }
-
-  logger.info(`Started requesting app info for appId ${appId}`);
+  const hasBeta = Boolean(betaPassword && betaBranch);
+  logger.info(
+    `Started requesting app info for appId ${appId}${
+      hasBeta ? ` [branch=${betaBranch} betaPassword set]` : ""
+    }`,
+  );
 
   return await enqueueRequest(async () => {
     const client = await getClient(username, password);
@@ -403,12 +156,54 @@ export async function getAppInfo(
     logger.debug(`Raw product info: ${JSON.stringify(data)}`);
 
     const appInfo = data.apps?.[appId];
-    if (appInfo) {
-      logger.info(`Successfully retrieved app info for appId ${appId}`);
-      return appInfo;
+    if (!appInfo) {
+      logger.warn(`No app info found for appId ${appId}`);
+      return null;
     }
 
-    logger.warn(`No app info found for appId ${appId}`);
-    return null;
+    if (hasBeta) {
+      try {
+        // CMsgClientPICSPrivateBetaRequest returns the depot section for a
+        // single password-protected branch. The branch metadata is stripped
+        // from getProductInfo since Valve's Nov 2024 server change, so we
+        // merge the unlocked branch back into appinfo.depots.branches to
+        // keep the response shape identical to the pre-Nov-2024 behavior.
+        const result = await withTimeout(
+          client.getAppPrivateBeta(appId, betaBranch, betaPassword),
+          REQUEST_TIMEOUT_MS,
+          `getAppPrivateBeta(${appId}, ${betaBranch})`,
+        ) as { depotSection?: Record<string, unknown> };
+
+        const privateDepots = result?.depotSection?.privatedepots as
+          | { branches?: Record<string, unknown> }
+          | undefined;
+        const privateBranches = privateDepots?.branches;
+
+        if (privateBranches && typeof privateBranches === "object") {
+          const depots = (appInfo.appinfo.depots ??= {}) as Record<
+            string,
+            unknown
+          >;
+          const branches = (depots.branches ??= {}) as Record<string, unknown>;
+          Object.assign(branches, privateBranches);
+          logger.info(
+            `Merged private branch '${betaBranch}' into appId ${appId}; branches now: ${
+              Object.keys(branches).join(", ")
+            }`,
+          );
+        } else {
+          logger.warn(
+            `getAppPrivateBeta returned no branches for appId ${appId} / branch '${betaBranch}' (wrong password?)`,
+          );
+        }
+      } catch (err) {
+        logger.warn(
+          `getAppPrivateBeta failed for appId ${appId} / branch '${betaBranch}': ${err}`,
+        );
+      }
+    }
+
+    logger.info(`Successfully retrieved app info for appId ${appId}`);
+    return appInfo;
   });
 }
