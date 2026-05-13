@@ -110,6 +110,9 @@ router.get("/v1/info/:appId", async (ctx: RouterContext<"/v1/info/:appId">) => {
   const { username, password } = parseBasicAuth(
     ctx.request.headers.get("authorization"),
   );
+  const betaPassword = ctx.request.headers.get("x-steam-beta-password") ||
+    ctx.request.url.searchParams.get("beta_password") ||
+    "";
 
   ctx.response.type = "application/json";
 
@@ -120,15 +123,22 @@ router.get("/v1/info/:appId", async (ctx: RouterContext<"/v1/info/:appId">) => {
     return;
   }
 
-  logger.info(`Request received for appId ${appId}`);
+  logger.info(
+    `Request received for appId ${appId}${
+      betaPassword ? " [betaPassword set]" : ""
+    }`,
+  );
 
   const credentialsKey = buildCredentialsKey(username, password);
-  const inFlightKey = `${appId}::${credentialsKey}`;
+  const inFlightKey = `${appId}::${credentialsKey}::${
+    betaPassword ? `beta:${betaPassword}` : "nobeta"
+  }`;
+  const cacheKey = betaPassword ? `${appId}::beta:${betaPassword}` : appId;
 
   let data: AppInfo | null = null;
 
   if (config.CACHE_ENABLED) {
-    data = await cacheRead(appId);
+    data = await cacheRead(cacheKey);
     if (data) {
       logger.info(`Returning cached data for appId ${appId}`);
       ctx.response.body = data;
@@ -139,7 +149,12 @@ router.get("/v1/info/:appId", async (ctx: RouterContext<"/v1/info/:appId">) => {
   try {
     let appInfoPromise = inFlight.get(inFlightKey);
     if (!appInfoPromise) {
-      appInfoPromise = getAppInfo(parsedAppId, username, password);
+      appInfoPromise = getAppInfo(
+        parsedAppId,
+        username,
+        password,
+        betaPassword,
+      );
       inFlight.set(
         inFlightKey,
         appInfoPromise.finally(() => inFlight.delete(inFlightKey)),
@@ -149,7 +164,7 @@ router.get("/v1/info/:appId", async (ctx: RouterContext<"/v1/info/:appId">) => {
     const appInfo = await appInfoPromise;
     if (appInfo) {
       if (config.CACHE_ENABLED) {
-        await cacheWrite(appId, appInfo);
+        await cacheWrite(cacheKey, appInfo);
       }
       ctx.response.body = appInfo;
     } else {

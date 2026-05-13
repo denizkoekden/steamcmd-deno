@@ -126,12 +126,33 @@ export async function getAppInfo(
   appId: number,
   username: string,
   password: string,
+  betaPassword = "",
 ): Promise<AppInfo | null> {
-  logger.info(`Started requesting app info for appId ${appId}`);
+  logger.info(
+    `Started requesting app info for appId ${appId}${
+      betaPassword ? " [betaPassword set]" : ""
+    }`,
+  );
   validateAppId(appId);
 
   return await enqueueRequest(async () => {
     const client = await getClient(username, password);
+
+    if (betaPassword) {
+      try {
+        await withTimeout(
+          client.getAppBetaDecryptionKeys(appId, betaPassword),
+          REQUEST_TIMEOUT_MS,
+          `getAppBetaDecryptionKeys(${appId})`,
+        );
+        logger.info(`Registered beta password for appId ${appId}`);
+      } catch (err) {
+        logger.warn(
+          `getAppBetaDecryptionKeys failed for appId ${appId}: ${err}`,
+        );
+      }
+    }
+
     logger.info(`Fetching product info for appId ${appId}`);
 
     const data = await withTimeout(
