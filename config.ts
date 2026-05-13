@@ -14,6 +14,8 @@ interface Config {
   PRELOAD_INTERVAL_MS: number;
   STEAM_REQUEST_TIMEOUT_MS: number;
   STEAM_REQUEST_DELAY_MS: number;
+  STEAMCMD_PATH: string;
+  STEAMCMD_TIMEOUT_MS: number;
   LOG_LEVEL: LevelName;
   VERSION: string;
 }
@@ -89,6 +91,15 @@ const parsedRequestDelay = parseNumber(
 );
 const safeRequestDelay = parsedRequestDelay >= 0 ? parsedRequestDelay : 0;
 
+const steamcmdTimeoutFallback = 60000;
+const parsedSteamcmdTimeout = parseNumber(
+  Deno.env.get("STEAMCMD_TIMEOUT_MS"),
+  steamcmdTimeoutFallback,
+);
+const safeSteamcmdTimeout = parsedSteamcmdTimeout > 0
+  ? parsedSteamcmdTimeout
+  : steamcmdTimeoutFallback;
+
 const parsedPreloadInterval = parseNumber(
   Deno.env.get("CACHE_PRELOAD_INTERVAL_MS"),
   Math.floor((safeCacheTtl * 1000) / 2),
@@ -111,6 +122,8 @@ const config: Config = {
   PRELOAD_INTERVAL_MS: safePreloadInterval,
   STEAM_REQUEST_TIMEOUT_MS: safeRequestTimeout,
   STEAM_REQUEST_DELAY_MS: safeRequestDelay,
+  STEAMCMD_PATH: Deno.env.get("STEAMCMD_PATH") || "",
+  STEAMCMD_TIMEOUT_MS: safeSteamcmdTimeout,
   VERSION: Deno.env.get("APP_VERSION") || "0.0.0-dev",
 };
 
