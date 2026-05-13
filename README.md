@@ -146,20 +146,29 @@ beta password continue to use the fast `steam-user` path.
 
 ### Requesting a Private Branch
 
-Send the branch password via the `X-Steam-Beta-Password` header (or
-`?beta_password=` query parameter). The response shape is identical to a normal
-request — the unlocked branch simply appears inside `appinfo.depots.branches`.
+Send the branch **name** and **password** as request headers (or as
+`?beta_branch=`/`?beta_password=` query parameters). **Both are required** —
+modern steamcmd's `set_app_beta_password <appid> -beta <branch> -betapassword
+<pw>` syntax mandates the branch name; the legacy two-arg form silently fails.
+
+The response shape is identical to a normal request — the unlocked branch
+simply appears inside `appinfo.depots.branches`.
 
 ```bash
 # Anonymous + beta password
 curl http://localhost:8000/v1/info/3951240 \
+     -H "X-Steam-Beta-Branch: development" \
      -H "X-Steam-Beta-Password: your_branch_password"
 
 # Authenticated + beta password
 curl http://localhost:8000/v1/info/3951240 \
      -u "steam_user:steam_password" \
+     -H "X-Steam-Beta-Branch: development" \
      -H "X-Steam-Beta-Password: your_branch_password"
 ```
+
+Sending `X-Steam-Beta-Password` without `X-Steam-Beta-Branch` returns a `400
+Bad Request`.
 
 The relevant `buildid` is then at:
 

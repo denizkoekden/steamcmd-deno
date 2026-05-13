@@ -113,6 +113,9 @@ router.get("/v1/info/:appId", async (ctx: RouterContext<"/v1/info/:appId">) => {
   const betaPassword = ctx.request.headers.get("x-steam-beta-password") ||
     ctx.request.url.searchParams.get("beta_password") ||
     "";
+  const betaBranch = ctx.request.headers.get("x-steam-beta-branch") ||
+    ctx.request.url.searchParams.get("beta_branch") ||
+    "";
 
   ctx.response.type = "application/json";
 
@@ -123,17 +126,28 @@ router.get("/v1/info/:appId", async (ctx: RouterContext<"/v1/info/:appId">) => {
     return;
   }
 
+  if (betaPassword && !betaBranch) {
+    ctx.response.status = 400;
+    ctx.response.body = {
+      error:
+        "X-Steam-Beta-Password requires X-Steam-Beta-Branch (steamcmd requires the branch name to register the password).",
+    };
+    return;
+  }
+
   logger.info(
     `Request received for appId ${appId}${
-      betaPassword ? " [betaPassword set]" : ""
+      betaPassword ? ` [branch=${betaBranch} betaPassword set]` : ""
     }`,
   );
 
   const credentialsKey = buildCredentialsKey(username, password);
   const inFlightKey = `${appId}::${credentialsKey}::${
-    betaPassword ? `beta:${betaPassword}` : "nobeta"
+    betaPassword ? `beta:${betaBranch}:${betaPassword}` : "nobeta"
   }`;
-  const cacheKey = betaPassword ? `${appId}::beta:${betaPassword}` : appId;
+  const cacheKey = betaPassword
+    ? `${appId}::beta:${betaBranch}:${betaPassword}`
+    : appId;
 
   let data: AppInfo | null = null;
 
@@ -154,6 +168,7 @@ router.get("/v1/info/:appId", async (ctx: RouterContext<"/v1/info/:appId">) => {
         username,
         password,
         betaPassword,
+        betaBranch,
       );
       inFlight.set(
         inFlightKey,

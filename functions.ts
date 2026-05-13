@@ -202,12 +202,19 @@ const getAppInfoViaSteamCmd = async (
   appId: number,
   username: string,
   password: string,
+  betaBranch: string,
   betaPassword: string,
 ): Promise<AppInfo | null> => {
   const steamcmdPath = config.STEAMCMD_PATH;
   if (!steamcmdPath) {
     logger.error(
       `STEAMCMD_PATH not configured; cannot resolve beta branch for appId ${appId}`,
+    );
+    return null;
+  }
+  if (!betaBranch) {
+    logger.error(
+      `Beta branch name missing for appId ${appId}; steamcmd's set_app_beta_password requires '-beta <name> -betapassword <pwd>'. Send X-Steam-Beta-Branch alongside X-Steam-Beta-Password.`,
     );
     return null;
   }
@@ -224,11 +231,24 @@ const getAppInfoViaSteamCmd = async (
     } else {
       args.push("+login", "anonymous");
     }
-    args.push("+set_app_beta_password", String(appId), betaPassword);
-    args.push("+app_info_update", "1");
+    // Current steamcmd requires named flags; the legacy two-arg form
+    // `set_app_beta_password <appid> <password>` only prints usage and
+    // silently fails to register the password.
+    args.push(
+      "+set_app_beta_password",
+      String(appId),
+      "-beta",
+      betaBranch,
+      "-betapassword",
+      betaPassword,
+    );
+    // app_info_request marks the app for immediate refresh; the subsequent
+    // app_info_print calls then receive fresh server data that reflects the
+    // beta-password unlock. The second print is a workaround for steamcmd's
+    // pattern where the first call may still return cached (pre-password)
+    // data — the second reliably includes the unlocked branch.
+    args.push("+app_info_request", String(appId));
     args.push("+app_info_print", String(appId));
-    // The second print is a workaround: the first call often returns cached
-    // (pre-password) data; the second reliably includes the unlocked branch.
     args.push("+app_info_print", String(appId));
     args.push("+quit");
 
@@ -264,6 +284,12 @@ const getAppInfoViaSteamCmd = async (
         }`,
       );
     }
+
+    logger.debug(
+      `steamcmd stdout for appId ${appId} (first 2000 chars):\n${
+        out.slice(0, 2000)
+      }`,
+    );
 
     const changeMatch = out.match(
       /AppID\s*:\s*\d+,\s*change number\s*:\s*(\d+)/,
@@ -338,14 +364,23 @@ export async function getAppInfo(
   username: string,
   password: string,
   betaPassword = "",
+  betaBranch = "",
 ): Promise<AppInfo | null> {
   validateAppId(appId);
 
   if (betaPassword) {
     logger.info(
-      `Started requesting app info for appId ${appId} via steamcmd [betaPassword set]`,
+      `Started requesting app info for appId ${appId} via steamcmd [branch=${
+        betaBranch || "?"
+      } betaPassword set]`,
     );
-    return getAppInfoViaSteamCmd(appId, username, password, betaPassword);
+    return getAppInfoViaSteamCmd(
+      appId,
+      username,
+      password,
+      betaBranch,
+      betaPassword,
+    );
   }
 
   logger.info(`Started requesting app info for appId ${appId}`);
