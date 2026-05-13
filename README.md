@@ -148,11 +148,15 @@ beta password continue to use the fast `steam-user` path.
 
 Send the branch **name** and **password** as request headers (or as
 `?beta_branch=`/`?beta_password=` query parameters). **Both are required** —
-modern steamcmd's `set_app_beta_password <appid> -beta <branch> -betapassword
-<pw>` syntax mandates the branch name; the legacy two-arg form silently fails.
+modern steamcmd has switched to a named-flag form:
 
-The response shape is identical to a normal request — the unlocked branch
-simply appears inside `appinfo.depots.branches`.
+```text
+set_app_beta_password <appid> -beta <branch> -betapassword <pwd>
+```
+
+The legacy two-arg form silently fails. The response shape is identical to a
+normal request — the unlocked branch simply appears inside
+`appinfo.depots.branches`.
 
 ```bash
 # Anonymous + beta password
@@ -167,8 +171,7 @@ curl http://localhost:8000/v1/info/3951240 \
      -H "X-Steam-Beta-Password: your_branch_password"
 ```
 
-Sending `X-Steam-Beta-Password` without `X-Steam-Beta-Branch` returns a `400
-Bad Request`.
+Sending the password header without the branch header returns HTTP 400.
 
 The relevant `buildid` is then at:
 
