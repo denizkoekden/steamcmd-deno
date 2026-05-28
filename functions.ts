@@ -37,8 +37,19 @@ const withTimeout = <T>(
   });
 };
 
+class ClientEvictedError extends Error {
+  constructor(reason: string) {
+    super(`Steam client evicted: ${reason}`);
+    this.name = "ClientEvictedError";
+  }
+}
+
 type CredentialsKey = string;
-const clientPromises = new Map<CredentialsKey, Promise<SteamUser>>();
+type ManagedClient = {
+  client: SteamUser;
+  whenEvicted: Promise<never>;
+};
+const clientPromises = new Map<CredentialsKey, Promise<ManagedClient>>();
 
 export const buildCredentialsKey = (
   username: string,
@@ -49,15 +60,22 @@ export const buildCredentialsKey = (
 const getClient = (
   username: string,
   password: string,
-): Promise<SteamUser> => {
+): Promise<ManagedClient> => {
   const mustAuthenticate = Boolean(username && password);
   const key = buildCredentialsKey(username, password);
 
   const existing = clientPromises.get(key);
   if (existing) return existing;
 
-  const createClient = new Promise<SteamUser>((resolve, reject) => {
+  const createClient = new Promise<ManagedClient>((resolve, reject) => {
     const client = new SteamUser();
+    let rejectLifecycle: (err: Error) => void = () => {};
+    const whenEvicted = new Promise<never>((_, rej) => {
+      rejectLifecycle = rej;
+    });
+    // Absorb the unhandled-rejection signal so it's safe to leave dangling
+    // when no in-flight call happens to be racing against it at eviction.
+    whenEvicted.catch(() => {});
 
     const evict = (reason: string) => {
       const tracked = clientPromises.get(key);
@@ -69,6 +87,7 @@ const getClient = (
           }): ${reason}`,
         );
       }
+      rejectLifecycle(new ClientEvictedError(reason));
       try {
         client.logOff();
       } catch (_) {
@@ -84,7 +103,7 @@ const getClient = (
       client.on("disconnected", (eresult: number, msg?: string) => {
         evict(`disconnected (eresult=${eresult}${msg ? `, ${msg}` : ""})`);
       });
-      resolve(client);
+      resolve({ client, whenEvicted });
     };
     const onError = (err: Error) => {
       client.off("loggedOn", onLoggedOn);
@@ -138,72 +157,97 @@ export async function getAppInfo(
     }`,
   );
 
+  const MAX_ATTEMPTS = 2;
+
   return await enqueueRequest(async () => {
-    const client = await getClient(username, password);
-    logger.info(`Fetching product info for appId ${appId}`);
+    for (let attempt = 1; ; attempt += 1) {
+      const { client, whenEvicted } = await getClient(username, password);
+      logger.info(`Fetching product info for appId ${appId}`);
 
-    const data = await withTimeout(
-      client.getProductInfo([appId], [], true),
-      REQUEST_TIMEOUT_MS,
-      `getProductInfo(${appId})`,
-    ) as { apps?: Record<number, AppInfo> } | undefined;
-
-    if (!data || typeof data !== "object") {
-      logger.error("Invalid response received from getProductInfo.");
-      throw new Error("Unexpected response format.");
-    }
-
-    logger.debug(`Raw product info: ${JSON.stringify(data)}`);
-
-    const appInfo = data.apps?.[appId];
-    if (!appInfo) {
-      logger.warn(`No app info found for appId ${appId}`);
-      return null;
-    }
-
-    if (hasBeta) {
       try {
-        // CMsgClientPICSPrivateBetaRequest returns the depot section for a
-        // single password-protected branch. The branch metadata is stripped
-        // from getProductInfo since Valve's Nov 2024 server change, so we
-        // merge the unlocked branch back into appinfo.depots.branches to
-        // keep the response shape identical to the pre-Nov-2024 behavior.
-        const result = await withTimeout(
-          client.getAppPrivateBeta(appId, betaBranch, betaPassword),
+        const data = await withTimeout(
+          Promise.race([
+            client.getProductInfo([appId], [], true),
+            whenEvicted,
+          ]),
           REQUEST_TIMEOUT_MS,
-          `getAppPrivateBeta(${appId}, ${betaBranch})`,
-        ) as { depotSection?: Record<string, unknown> };
+          `getProductInfo(${appId})`,
+        ) as { apps?: Record<number, AppInfo> } | undefined;
 
-        const privateDepots = result?.depotSection?.privatedepots as
-          | { branches?: Record<string, unknown> }
-          | undefined;
-        const privateBranches = privateDepots?.branches;
-
-        if (privateBranches && typeof privateBranches === "object") {
-          const depots = (appInfo.appinfo.depots ??= {}) as Record<
-            string,
-            unknown
-          >;
-          const branches = (depots.branches ??= {}) as Record<string, unknown>;
-          Object.assign(branches, privateBranches);
-          logger.info(
-            `Merged private branch '${betaBranch}' into appId ${appId}; branches now: ${
-              Object.keys(branches).join(", ")
-            }`,
-          );
-        } else {
-          logger.warn(
-            `getAppPrivateBeta returned no branches for appId ${appId} / branch '${betaBranch}' (wrong password?)`,
-          );
+        if (!data || typeof data !== "object") {
+          logger.error("Invalid response received from getProductInfo.");
+          throw new Error("Unexpected response format.");
         }
+
+        logger.debug(`Raw product info: ${JSON.stringify(data)}`);
+
+        const appInfo = data.apps?.[appId];
+        if (!appInfo) {
+          logger.warn(`No app info found for appId ${appId}`);
+          return null;
+        }
+
+        if (hasBeta) {
+          try {
+            // CMsgClientPICSPrivateBetaRequest returns the depot section for a
+            // single password-protected branch. The branch metadata is stripped
+            // from getProductInfo since Valve's Nov 2024 server change, so we
+            // merge the unlocked branch back into appinfo.depots.branches to
+            // keep the response shape identical to the pre-Nov-2024 behavior.
+            const result = await withTimeout(
+              Promise.race([
+                client.getAppPrivateBeta(appId, betaBranch, betaPassword),
+                whenEvicted,
+              ]),
+              REQUEST_TIMEOUT_MS,
+              `getAppPrivateBeta(${appId}, ${betaBranch})`,
+            ) as { depotSection?: Record<string, unknown> };
+
+            const privateDepots = result?.depotSection?.privatedepots as
+              | { branches?: Record<string, unknown> }
+              | undefined;
+            const privateBranches = privateDepots?.branches;
+
+            if (privateBranches && typeof privateBranches === "object") {
+              const depots = (appInfo.appinfo.depots ??= {}) as Record<
+                string,
+                unknown
+              >;
+              const branches = (depots.branches ??= {}) as Record<
+                string,
+                unknown
+              >;
+              Object.assign(branches, privateBranches);
+              logger.info(
+                `Merged private branch '${betaBranch}' into appId ${appId}; branches now: ${
+                  Object.keys(branches).join(", ")
+                }`,
+              );
+            } else {
+              logger.warn(
+                `getAppPrivateBeta returned no branches for appId ${appId} / branch '${betaBranch}' (wrong password?)`,
+              );
+            }
+          } catch (err) {
+            logger.warn(
+              `getAppPrivateBeta failed for appId ${appId} / branch '${betaBranch}': ${err}`,
+            );
+          }
+        }
+
+        logger.info(`Successfully retrieved app info for appId ${appId}`);
+        return appInfo;
       } catch (err) {
-        logger.warn(
-          `getAppPrivateBeta failed for appId ${appId} / branch '${betaBranch}': ${err}`,
-        );
+        if (err instanceof ClientEvictedError && attempt < MAX_ATTEMPTS) {
+          logger.warn(
+            `appId ${appId}: ${err.message}; retrying with fresh client (attempt ${
+              attempt + 1
+            }/${MAX_ATTEMPTS})`,
+          );
+          continue;
+        }
+        throw err;
       }
     }
-
-    logger.info(`Successfully retrieved app info for appId ${appId}`);
-    return appInfo;
   });
 }

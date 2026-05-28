@@ -169,11 +169,8 @@ router.get("/v1/info/:appId", async (ctx: RouterContext<"/v1/info/:appId">) => {
         password,
         betaPassword,
         betaBranch,
-      );
-      inFlight.set(
-        inFlightKey,
-        appInfoPromise.finally(() => inFlight.delete(inFlightKey)),
-      );
+      ).finally(() => inFlight.delete(inFlightKey));
+      inFlight.set(inFlightKey, appInfoPromise);
     }
 
     const appInfo = await appInfoPromise;
