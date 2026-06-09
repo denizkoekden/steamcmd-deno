@@ -78,8 +78,9 @@ const getClient = (
     whenEvicted.catch(() => {});
 
     const evict = (reason: string) => {
-      const tracked = clientPromises.get(key);
-      if (tracked) {
+      // Only remove our own map entry: a stale event from an already-replaced
+      // client must not evict the successor client.
+      if (clientPromises.get(key) === createClient) {
         clientPromises.delete(key);
         logger.warn(
           `Evicted Steam client (${
@@ -107,7 +108,9 @@ const getClient = (
     };
     const onError = (err: Error) => {
       client.off("loggedOn", onLoggedOn);
-      clientPromises.delete(key);
+      if (clientPromises.get(key) === createClient) {
+        clientPromises.delete(key);
+      }
       reject(err);
     };
 
@@ -160,8 +163,28 @@ export async function getAppInfo(
   const MAX_ATTEMPTS = 2;
 
   return await enqueueRequest(async () => {
-    for (let attempt = 1; ; attempt += 1) {
-      const { client, whenEvicted } = await getClient(username, password);
+    for (let attempt = 1;; attempt += 1) {
+      // The login itself needs a timeout: steam-user cycles CMs silently when
+      // throttled and may emit neither `loggedOn` nor `error`, which would
+      // otherwise leave every request awaiting this promise hanging forever.
+      const key = buildCredentialsKey(username, password);
+      const clientPromise = getClient(username, password);
+      let managed: ManagedClient;
+      try {
+        managed = await withTimeout(
+          clientPromise,
+          REQUEST_TIMEOUT_MS,
+          `steam login (${key === "anonymous" ? "anon" : "auth"})`,
+        );
+      } catch (err) {
+        if (clientPromises.get(key) === clientPromise) {
+          clientPromises.delete(key);
+          // The hung login may still complete later; don't leak the session.
+          clientPromise.then(({ client }) => client.logOff()).catch(() => {});
+        }
+        throw err;
+      }
+      const { client, whenEvicted } = managed;
       logger.info(`Fetching product info for appId ${appId}`);
 
       try {
