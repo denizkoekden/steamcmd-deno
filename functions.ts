@@ -7,6 +7,15 @@ const logger = log.getLogger("functions");
 const REQUEST_DELAY_MS = config.STEAM_REQUEST_DELAY_MS;
 const REQUEST_TIMEOUT_MS = config.STEAM_REQUEST_TIMEOUT_MS;
 const THROTTLE_ENABLED = REQUEST_DELAY_MS > 0;
+// How long a single login attempt may keep cycling CMs before the client is
+// torn down and replaced. steam-user retries silently with its own backoff,
+// so this is a hard upper bound, not the normal path.
+const LOGIN_PENDING_MAX_MS = 120_000;
+const LOGIN_PENDING_WARN_INTERVAL_MS = 30_000;
+// After a login *error* (RateLimitExceeded, InvalidPassword, ...) don't start
+// a new logon per incoming request — fail fast until the cooldown expires.
+const LOGIN_ERROR_COOLDOWN_MS = 10_000;
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let requestChain: Promise<unknown> = Promise.resolve();
@@ -20,6 +29,13 @@ const enqueueRequest = <T>(fn: () => Promise<T>): Promise<T> => {
   return run;
 };
 
+class TimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TimeoutError";
+  }
+}
+
 const withTimeout = <T>(
   promise: Promise<T>,
   ms: number,
@@ -28,7 +44,7 @@ const withTimeout = <T>(
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(
-      () => reject(new Error(`${label} timed out after ${ms}ms`)),
+      () => reject(new TimeoutError(`${label} timed out after ${ms}ms`)),
       ms,
     );
   });
@@ -49,7 +65,16 @@ type ManagedClient = {
   client: SteamUser;
   whenEvicted: Promise<never>;
 };
-const clientPromises = new Map<CredentialsKey, Promise<ManagedClient>>();
+type ManagedEntry = {
+  client: SteamUser;
+  // Resolves on `loggedOn`, rejects on a login error or eviction.
+  ready: Promise<ManagedClient>;
+  createdAt: number;
+  pending: boolean;
+  evict: (reason: string) => void;
+};
+const clients = new Map<CredentialsKey, ManagedEntry>();
+const loginCooldownUntil = new Map<CredentialsKey, number>();
 
 export const buildCredentialsKey = (
   username: string,
@@ -57,66 +82,118 @@ export const buildCredentialsKey = (
 ): CredentialsKey =>
   username && password ? `${username}::${password}` : "anonymous";
 
-const getClient = (
-  username: string,
-  password: string,
-): Promise<ManagedClient> => {
+const getEntry = (username: string, password: string): ManagedEntry => {
   const mustAuthenticate = Boolean(username && password);
   const key = buildCredentialsKey(username, password);
+  const label = mustAuthenticate ? "auth" : "anon";
 
-  const existing = clientPromises.get(key);
+  const existing = clients.get(key);
   if (existing) return existing;
 
-  const createClient = new Promise<ManagedClient>((resolve, reject) => {
-    const client = new SteamUser();
-    let rejectLifecycle: (err: Error) => void = () => {};
-    const whenEvicted = new Promise<never>((_, rej) => {
-      rejectLifecycle = rej;
+  const cooldownUntil = loginCooldownUntil.get(key) ?? 0;
+  if (Date.now() < cooldownUntil) {
+    const secondsLeft = Math.ceil((cooldownUntil - Date.now()) / 1000);
+    throw new Error(
+      `steam login (${label}) in cooldown for ${secondsLeft}s after a recent login failure`,
+    );
+  }
+
+  const client = new SteamUser();
+  let rejectLifecycle: (err: Error) => void = () => {};
+  const whenEvicted = new Promise<never>((_, rej) => {
+    rejectLifecycle = rej;
+  });
+  // Absorb the unhandled-rejection signal so it's safe to leave dangling
+  // when no in-flight call happens to be racing against it at eviction.
+  whenEvicted.catch(() => {});
+
+  let resolveReady: (managed: ManagedClient) => void = () => {};
+  let rejectReady: (err: Error) => void = () => {};
+  const ready = new Promise<ManagedClient>((res, rej) => {
+    resolveReady = res;
+    rejectReady = rej;
+  });
+  // Same as above: eviction may happen while nobody is awaiting `ready`.
+  ready.catch(() => {});
+
+  const entry: ManagedEntry = {
+    client,
+    ready,
+    createdAt: Date.now(),
+    pending: true,
+    evict: () => {},
+  };
+
+  // steam-user retries throttled logins (TryAnotherCM / ServiceUnavailable)
+  // silently and forever — no `loggedOn`, no `error`. Make that state visible
+  // and bound it: warn while pending, replace the client once it has been
+  // stuck past LOGIN_PENDING_MAX_MS.
+  const warnTimer = setInterval(() => {
+    const ageMs = Date.now() - entry.createdAt;
+    if (ageMs >= LOGIN_PENDING_MAX_MS) {
+      evict(`login still pending after ${Math.round(ageMs / 1000)}s`);
+      return;
+    }
+    logger.warn(
+      `Steam login (${label}) still pending after ${
+        Math.round(ageMs / 1000)
+      }s — Steam is likely throttling logons`,
+    );
+  }, LOGIN_PENDING_WARN_INTERVAL_MS);
+
+  const clearPending = () => {
+    entry.pending = false;
+    clearInterval(warnTimer);
+  };
+
+  const evict = (reason: string) => {
+    // Only remove our own map entry: a stale event from an already-replaced
+    // client must not evict the successor client.
+    if (clients.get(key) === entry) {
+      clients.delete(key);
+      logger.warn(`Evicted Steam client (${label}): ${reason}`);
+    }
+    clearPending();
+    const err = new ClientEvictedError(reason);
+    // Fail current waiters immediately (no-ops once `ready` is settled).
+    rejectReady(err);
+    rejectLifecycle(err);
+    try {
+      // Also cancels steam-user's internal logon retry timers mid-login, so
+      // an evicted client can't keep hammering CMs in the background.
+      client.logOff();
+    } catch (_) {
+      // ignore — client may already be torn down
+    }
+  };
+  entry.evict = evict;
+
+  const onLoggedOn = () => {
+    clearPending();
+    loginCooldownUntil.delete(key);
+    client.off("error", onError);
+    client.on("error", (err: Error) => {
+      evict(`error: ${err?.message ?? err}`);
     });
-    // Absorb the unhandled-rejection signal so it's safe to leave dangling
-    // when no in-flight call happens to be racing against it at eviction.
-    whenEvicted.catch(() => {});
+    client.on("disconnected", (eresult: number, msg?: string) => {
+      evict(`disconnected (eresult=${eresult}${msg ? `, ${msg}` : ""})`);
+    });
+    resolveReady({ client, whenEvicted });
+  };
+  const onError = (err: Error) => {
+    client.off("loggedOn", onLoggedOn);
+    clearPending();
+    loginCooldownUntil.set(key, Date.now() + LOGIN_ERROR_COOLDOWN_MS);
+    if (clients.get(key) === entry) {
+      clients.delete(key);
+    }
+    rejectReady(err);
+  };
 
-    const evict = (reason: string) => {
-      // Only remove our own map entry: a stale event from an already-replaced
-      // client must not evict the successor client.
-      if (clientPromises.get(key) === createClient) {
-        clientPromises.delete(key);
-        logger.warn(
-          `Evicted Steam client (${
-            mustAuthenticate ? "auth" : "anon"
-          }): ${reason}`,
-        );
-      }
-      rejectLifecycle(new ClientEvictedError(reason));
-      try {
-        client.logOff();
-      } catch (_) {
-        // ignore — client may already be torn down
-      }
-    };
+  client.once("loggedOn", onLoggedOn);
+  client.once("error", onError);
 
-    const onLoggedOn = () => {
-      client.off("error", onError);
-      client.on("error", (err: Error) => {
-        evict(`error: ${err?.message ?? err}`);
-      });
-      client.on("disconnected", (eresult: number, msg?: string) => {
-        evict(`disconnected (eresult=${eresult}${msg ? `, ${msg}` : ""})`);
-      });
-      resolve({ client, whenEvicted });
-    };
-    const onError = (err: Error) => {
-      client.off("loggedOn", onLoggedOn);
-      if (clientPromises.get(key) === createClient) {
-        clientPromises.delete(key);
-      }
-      reject(err);
-    };
-
-    client.once("loggedOn", onLoggedOn);
-    client.once("error", onError);
-
+  try {
     if (mustAuthenticate) {
       logger.debug("Attempting authenticated login...");
       client.logOn({ accountName: username, password });
@@ -124,10 +201,13 @@ const getClient = (
       logger.debug("Attempting anonymous login...");
       client.logOn({ anonymous: true });
     }
-  });
+  } catch (err) {
+    clearPending();
+    throw err;
+  }
 
-  clientPromises.set(key, createClient);
-  return createClient;
+  clients.set(key, entry);
+  return entry;
 };
 
 export interface AppInfo {
@@ -164,27 +244,20 @@ export async function getAppInfo(
 
   return await enqueueRequest(async () => {
     for (let attempt = 1;; attempt += 1) {
-      // The login itself needs a timeout: steam-user cycles CMs silently when
-      // throttled and may emit neither `loggedOn` nor `error`, which would
-      // otherwise leave every request awaiting this promise hanging forever.
       const key = buildCredentialsKey(username, password);
-      const clientPromise = getClient(username, password);
-      let managed: ManagedClient;
-      try {
-        managed = await withTimeout(
-          clientPromise,
-          REQUEST_TIMEOUT_MS,
-          `steam login (${key === "anonymous" ? "anon" : "auth"})`,
-        );
-      } catch (err) {
-        if (clientPromises.get(key) === clientPromise) {
-          clientPromises.delete(key);
-          // The hung login may still complete later; don't leak the session.
-          clientPromise.then(({ client }) => client.logOff()).catch(() => {});
-        }
-        throw err;
-      }
-      const { client, whenEvicted } = managed;
+      const entry = getEntry(username, password);
+      // The login needs a timeout: steam-user cycles CMs silently when
+      // throttled and may emit neither `loggedOn` nor `error`. The request
+      // fails after REQUEST_TIMEOUT_MS, but the pending login stays in the
+      // registry: steam-user keeps retrying with its own backoff and the
+      // heartbeat in getEntry() replaces the client if it stays stuck.
+      // Evicting here per request would instead spawn a fresh logon attempt
+      // every REQUEST_TIMEOUT_MS and amplify the throttling that caused it.
+      const { client, whenEvicted } = await withTimeout(
+        entry.ready,
+        REQUEST_TIMEOUT_MS,
+        `steam login (${key === "anonymous" ? "anon" : "auth"})`,
+      );
       logger.info(`Fetching product info for appId ${appId}`);
 
       try {
@@ -268,6 +341,12 @@ export async function getAppInfo(
             }/${MAX_ATTEMPTS})`,
           );
           continue;
+        }
+        if (err instanceof TimeoutError) {
+          // A timed-out PICS call usually means a half-dead session that
+          // steam-user hasn't noticed yet; drop it so the next request gets
+          // a fresh client instead of burning the timeout again.
+          entry.evict(err.message);
         }
         throw err;
       }
