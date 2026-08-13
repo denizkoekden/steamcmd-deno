@@ -91,6 +91,10 @@ The API exposes the following routes:
 - `GET /v1/info/:appId`: Fetches app information for a given Steam `appId`.
   Supports both authenticated and anonymous logins. Returns `400` for malformed
   `appId` or incomplete credentials.
+- `GET /v1/workshop/:ids`: Fetches workshop item details (batched, up to 100
+  comma-separated published file ids) via the Steam CM connection. Response is
+  `{ "files": { "<id>": { "result", "time_updated", "title", ... } } }`; ids
+  Steam does not return are absent from the map. Results are cached per id.
 - `GET /v1/version`: Retrieves the current API version.
 
 ## Authentication

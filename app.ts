@@ -1,14 +1,29 @@
 import { Application, Router, type RouterContext } from "@oak/oak";
 
 import config from "./config.ts";
-import { cacheRead, cacheWrite, getAuthFlag, setAuthFlag } from "./cache.ts";
-import { type AppInfo, buildCredentialsKey, getAppInfo } from "./functions.ts";
+import {
+  cacheRead,
+  cacheReadRaw,
+  cacheWrite,
+  cacheWriteRaw,
+  getAuthFlag,
+  setAuthFlag,
+} from "./cache.ts";
+import {
+  type AppInfo,
+  buildCredentialsKey,
+  getAppInfo,
+  getWorkshopDetails,
+  type WorkshopFileInfo,
+} from "./functions.ts";
 import { log } from "./utils.ts";
 
 const logger = log.getLogger("app");
 const app = new Application();
 const router = new Router();
 const inFlight = new Map<string, Promise<AppInfo | null>>();
+const workshopInFlight = new Map<string, Promise<WorkshopFileInfo | null>>();
+const MAX_WORKSHOP_IDS = 100;
 const preloadAppIds = config.PRELOAD_APP_IDS ?? [];
 const preloadUsername = config.PRELOAD_USERNAME ?? "";
 const preloadPassword = config.PRELOAD_PASSWORD ?? "";
@@ -104,6 +119,106 @@ router.get("/v1/version", (ctx) => {
   ctx.response.type = "application/json";
   ctx.response.body = { version: config.VERSION };
 });
+
+// Batched workshop item lookup: /v1/workshop/<id>[,<id>...]
+// Response: { files: { "<id>": { time_updated, ... } } } — ids Steam did not
+// return (deleted/hidden) are absent, callers fall back per id.
+router.get(
+  "/v1/workshop/:ids",
+  async (ctx: RouterContext<"/v1/workshop/:ids">) => {
+    ctx.response.type = "application/json";
+
+    const rawIds = ctx.params.ids.split(",").map((s) => s.trim()).filter((s) =>
+      s.length > 0
+    );
+    if (rawIds.length === 0 || rawIds.length > MAX_WORKSHOP_IDS) {
+      ctx.response.status = 400;
+      ctx.response.body = {
+        error: `Provide 1-${MAX_WORKSHOP_IDS} comma-separated workshop ids.`,
+      };
+      return;
+    }
+    const ids: number[] = [];
+    for (const raw of rawIds) {
+      const parsed = Number(raw);
+      if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+        ctx.response.status = 400;
+        ctx.response.body = {
+          error: `Workshop id '${raw}' must be a positive integer.`,
+        };
+        return;
+      }
+      ids.push(parsed);
+    }
+    const unique = [...new Set(ids)];
+    logger.info(`Workshop request received for ${unique.length} id(s)`);
+
+    const files: Record<string, WorkshopFileInfo> = {};
+    const misses: number[] = [];
+    const pending: [string, Promise<WorkshopFileInfo | null>][] = [];
+
+    for (const id of unique) {
+      const key = `${id}`;
+      const cached = await cacheReadRaw(`workshop:${key}`);
+      if (cached) {
+        files[key] = cached as WorkshopFileInfo;
+        continue;
+      }
+      const running = workshopInFlight.get(key);
+      if (running) {
+        pending.push([key, running]);
+      } else {
+        misses.push(id);
+      }
+    }
+
+    try {
+      if (misses.length > 0) {
+        const batch = getWorkshopDetails(misses);
+        batch.catch(() => {}); // rejection is handled per derived promise
+        for (const id of misses) {
+          const key = `${id}`;
+          const single = batch
+            .then(async (result) => {
+              const info = result[key] ?? null;
+              if (info) {
+                await cacheWriteRaw(`workshop:${key}`, info);
+              }
+              return info;
+            })
+            .finally(() => workshopInFlight.delete(key));
+          single.catch(() => {});
+          workshopInFlight.set(key, single);
+          pending.push([key, single]);
+        }
+      }
+
+      const settled = await Promise.allSettled(pending.map(([, p]) => p));
+      let failed = 0;
+      settled.forEach((res, i) => {
+        if (res.status === "fulfilled" && res.value) {
+          files[pending[i][0]] = res.value;
+        } else if (res.status === "rejected") {
+          failed += 1;
+        }
+      });
+
+      // All requested ids failed on a backend error → surface it instead of
+      // returning an empty map that looks like "all mods deleted".
+      if (failed > 0 && Object.keys(files).length === 0) {
+        ctx.response.status = 502;
+        ctx.response.body = { error: "Steam workshop lookup failed" };
+        return;
+      }
+
+      ctx.response.body = { files };
+    } catch (err) {
+      logger.error(`Error processing workshop request: ${err}`);
+      ctx.response.status = 500;
+      ctx.response.body = { error: "Internal Server Error" };
+    }
+  },
+);
 
 router.get("/v1/info/:appId", async (ctx: RouterContext<"/v1/info/:appId">) => {
   const { appId } = ctx.params;

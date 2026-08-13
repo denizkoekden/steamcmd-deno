@@ -217,6 +217,92 @@ export interface AppInfo {
   appinfo: Record<string, unknown>;
 }
 
+export interface WorkshopFileInfo {
+  publishedfileid: string;
+  result: number;
+  consumer_app_id: number | null;
+  title: string | null;
+  time_created: number | null;
+  time_updated: number | null;
+  file_size: string | null;
+  hcontent_file: string | null;
+}
+
+const MAX_ATTEMPTS = 2;
+
+// Batched workshop item lookup over the CM connection
+// (PublishedFile.GetDetails#1). Replaces per-item calls to the public
+// GetPublishedFileDetails web API, which rate-limits the game nodes.
+export async function getWorkshopDetails(
+  ids: number[],
+): Promise<Record<string, WorkshopFileInfo>> {
+  if (ids.length === 0) return {};
+  logger.info(`Started requesting workshop details for ${ids.length} id(s)`);
+
+  return await enqueueRequest(async () => {
+    for (let attempt = 1;; attempt += 1) {
+      const entry = getEntry("", "");
+      const { client, whenEvicted } = await withTimeout(
+        entry.ready,
+        REQUEST_TIMEOUT_MS,
+        "steam login (anon)",
+      );
+
+      try {
+        const result = await withTimeout(
+          Promise.race([
+            client.getPublishedFileDetails(ids),
+            whenEvicted,
+          ]),
+          REQUEST_TIMEOUT_MS,
+          `getPublishedFileDetails(${ids.length} ids)`,
+        ) as { files?: Record<string, Record<string, unknown>> };
+
+        const files: Record<string, WorkshopFileInfo> = {};
+        for (const [id, raw] of Object.entries(result?.files ?? {})) {
+          files[id] = {
+            publishedfileid: String(raw.publishedfileid ?? id),
+            result: Number(raw.result ?? 0),
+            consumer_app_id: raw.consumer_appid != null
+              ? Number(raw.consumer_appid)
+              : null,
+            title: typeof raw.title === "string" ? raw.title : null,
+            time_created: raw.time_created != null
+              ? Number(raw.time_created)
+              : null,
+            time_updated: raw.time_updated != null
+              ? Number(raw.time_updated)
+              : null,
+            file_size: raw.file_size != null ? String(raw.file_size) : null,
+            hcontent_file: raw.hcontent_file != null
+              ? String(raw.hcontent_file)
+              : null,
+          };
+        }
+        logger.info(
+          `Successfully retrieved workshop details for ${
+            Object.keys(files).length
+          }/${ids.length} id(s)`,
+        );
+        return files;
+      } catch (err) {
+        if (err instanceof ClientEvictedError && attempt < MAX_ATTEMPTS) {
+          logger.warn(
+            `workshop details: ${err.message}; retrying with fresh client (attempt ${
+              attempt + 1
+            }/${MAX_ATTEMPTS})`,
+          );
+          continue;
+        }
+        if (err instanceof TimeoutError) {
+          entry.evict(err.message);
+        }
+        throw err;
+      }
+    }
+  });
+}
+
 const validateAppId = (appId: number) => {
   if (!Number.isSafeInteger(appId) || appId <= 0) {
     logger.error(`Invalid appId provided: ${appId}`);
@@ -239,8 +325,6 @@ export async function getAppInfo(
       hasBeta ? ` [branch=${betaBranch} betaPassword set]` : ""
     }`,
   );
-
-  const MAX_ATTEMPTS = 2;
 
   return await enqueueRequest(async () => {
     for (let attempt = 1;; attempt += 1) {

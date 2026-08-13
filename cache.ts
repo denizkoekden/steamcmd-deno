@@ -100,6 +100,39 @@ export async function cacheWrite(appId: string, data: AppInfo): Promise<void> {
   }
 }
 
+export async function cacheReadRaw(key: string): Promise<unknown | null> {
+  if (!config.CACHE_ENABLED) return null;
+  const client = await getRedisClient();
+  if (!client) return null;
+  let data: string | null;
+  try {
+    data = await client.get(key);
+  } catch (err) {
+    invalidateClient(err);
+    return null;
+  }
+  if (!data) return null;
+  try {
+    return JSON.parse(data);
+  } catch (err) {
+    logger.error(`Failed to parse cached data for key ${key}: ${err}`);
+    return null;
+  }
+}
+
+export async function cacheWriteRaw(key: string, data: unknown): Promise<void> {
+  if (!config.CACHE_ENABLED) return;
+  const client = await getRedisClient();
+  if (!client) return;
+  try {
+    await client.set(key, JSON.stringify(data), {
+      ex: config.CACHE_EXPIRATION,
+    });
+  } catch (err) {
+    invalidateClient(err);
+  }
+}
+
 export async function getAuthFlag(appId: string): Promise<AuthFlag | null> {
   if (!config.CACHE_ENABLED) return null;
   const client = await getRedisClient();
